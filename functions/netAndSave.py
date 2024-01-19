@@ -6,20 +6,15 @@ from matplotlib import pyplot as plt
 import pandas as pd
 import logging
 
-import matplotlib.pyplot as plt
-import numpy as np
-import torchvision.transforms as transforms
-
-def display_and_save_images(image_list, output_file, type='png'):
+def save_image_dict(image_dict, output_path, type='png'):
     """
-    mult_img_list 是一个包含了PyTorch张量图像的列表
+    mult_img_list 是一个包含了PyTorch张量图像的字典
     """
     # 创建一个7x1的子图布局
-    fig, axes = plt.subplots(1, len(image_list), figsize=(20, 4))
-    # 在每个子图中显示图像
-    for i in range(len(image_list)):
+    fig, axes = plt.subplots(1, len(image_dict), figsize=(20, 4))
+    for i, (img_name, img_tensor) in enumerate(image_dict.items()):
         # 如果图像在GPU上，先移动到CPU
-        img = image_list[i].cpu()
+        img = img_tensor.cpu()
         # 如果图像张量有批次维度，去掉批次维度
         if img.ndim == 4 and img.shape[0] == 1:
             img = img.squeeze(0)
@@ -33,10 +28,10 @@ def display_and_save_images(image_list, output_file, type='png'):
             cmap = None
             # 显示图像
         axes[i].imshow(img, cmap=cmap)
-        axes[i].axis('off')  # 关闭坐标轴
-        axes[i].set_title(f'Image {i + 1}')  # 设置标题
-    plt.savefig(output_file, type=type)
-    plt.show()
+        axes[i].axis('off')
+        axes[i].set_title(img_name) # 设置标题
+    plt.savefig(output_path, type=type)
+    # plt.show()
 
 # display_and_save_images(mult_img_list, 'mult_img_display.png', format='png')
 # display_and_save_images(mult_img_list, 'mult_img_display.jpg', format='jpg')

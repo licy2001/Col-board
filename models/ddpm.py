@@ -20,6 +20,7 @@ from functions.netAndSave import (
     loss_plot,
     loss_table,
     setup_logger,
+    save_image_dict,
 )
 from functions.get_Optimizer import get_optimizer
 from functions.losses import noise_estimation_loss
@@ -28,9 +29,6 @@ from functions import metrics
 
 
 def get_beta_schedule(beta_schedule, *, beta_start, beta_end, num_diffusion_timesteps):
-    def sigmoid(x):
-        return 1 / (torch.exp(-x) + 1)
-
     if beta_schedule == "quad":
         betas = (torch.linspace(beta_start ** 0.5, beta_end ** 0.5, num_diffusion_timesteps, dtype=torch.float64) ** 2)
     elif beta_schedule == "linear":
@@ -45,7 +43,7 @@ def get_beta_schedule(beta_schedule, *, beta_start, beta_end, num_diffusion_time
         )
     elif beta_schedule == "sigmoid":
         betas = torch.linspace(-6, 6, num_diffusion_timesteps)
-        betas = sigmoid(betas) * (beta_end - beta_start) + beta_start
+        betas = torch.sigmoid(betas) * (beta_end - beta_start) + beta_start
     else:
         raise NotImplementedError(beta_schedule)
     assert betas.shape == (num_diffusion_timesteps,)
@@ -131,12 +129,12 @@ class DDPM(object):
         )
 
     def setup(self, args, config):
-        self.root_dir = os.path.join(config.path.root, "results", "{}".format(args.name))
+        self.root_dir = os.path.join(config.path.root, "results", "{}".format(config.data.dataset))
         os.makedirs(self.root_dir, exist_ok=True)
         self.log_dir = os.path.join(self.root_dir, config.path.log)
         os.makedirs(self.log_dir, exist_ok=True)
         self.figure_dir = os.path.join(self.root_dir, config.path.figure)
-        self.generate_process_dir = os.path.join(self.root_dir, "train_process")
+        self.generate_process_dir = os.path.join(self.root_dir, config.path.train_process)
         self.val_sample_dir = os.path.join(self.root_dir, config.path.val_sample)
         self.test_sample_dir = os.path.join(self.root_dir, config.path.test_sample)
         self.checkpoint_dir = os.path.join(self.root_dir, config.path.checkpoint)
@@ -175,7 +173,7 @@ class DDPM(object):
         else:
             model_input = torch.cat([xt, x_cond], dim=1)
 
-        eps_theta = self.model(model_input,t)
+        eps_theta = self.model(model_input, t)
         x0_coef1 = self.extract(self.sqrt_recip_alphas_bar, t)
         x0_coef2 = self.extract(self.sqrt_one_minus_alphas_bar, t)
         pred_x0 = x0_coef1 * (xt - x0_coef2 * eps_theta)
@@ -220,7 +218,7 @@ class DDPM(object):
                 # loss, x_t, pred_noise, pred_x0 = noise_estimation_loss(
                 #     self.model, x0, x_cond, t, e, b
                 # )
-                loss, x_t, pred_noise, pred_x0 = self.get_loss(x0=x0, x_cond=x_cond)
+                loss, x_t, eps, pred_noise, pred_x0 = self.get_loss(x0=x0, x_cond=x_cond)
                 self.logger.info(
                     f"step: {self.step}\tloss: {loss.item():.8f}\tdata time: {data_time / (i + 1):.4f}"
                 )
@@ -231,110 +229,67 @@ class DDPM(object):
                 if self.config.model.ema:
                     self.ema_helper.update(self.model)
 
-                epoch_loss += loss.item() * current_batch_size
+                # epoch_loss += loss.item() * current_batch_size
+                epoch_loss += loss.item()
                 if self.step % 100 == 0 or self.step == 1:
-                    mult_img = [
-                        inverse_data_transform(x[0, :3, :, :].detach().float().cpu()),
-                        inverse_data_transform(x[0, 3:6, :, :].detach().float().cpu()),
-                        inverse_data_transform(x_t[0, ::].detach().float().cpu()),
-                        inverse_data_transform(e[0, ::].detach().float().cpu()),
-                        inverse_data_transform(
-                            pred_noise[0, ::].detach().float().cpu()
-                        ),
-                        inverse_data_transform(pred_x0[0, ::].detach().float().cpu()),
-                        inverse_data_transform(x[0, 6:, ::].detach().float().cpu()),
-                    ]
-
-                    mult_img = make_grid(mult_img, nrow=7, padding=2)
+                    mult_img_dict = {
+                        'cond1': inverse_data_transform(x[0, :3, :, :].detach().float().cpu()),
+                        'cond2': inverse_data_transform(x[0, 3:6, :, :].detach().float().cpu()),
+                        'xt': inverse_data_transform(x_t[0, ::].detach().float().cpu()),
+                        'noise': inverse_data_transform(eps[0, ::].detach().float().cpu()),
+                        'pred_noise': inverse_data_transform(pred_noise[0, ::].detach().float().cpu()),
+                        'pred_x0': inverse_data_transform(pred_x0[0, ::].detach().float().cpu()),
+                        'x0': inverse_data_transform(x[0, 6:, ::].detach().float().cpu())
+                    }
                     os.makedirs(self.generate_process_dir, exist_ok=True)
-                    mult_img_path = os.path.join(
-                        self.generate_process_dir, f"grid_mult_img{self.step}.png"
-                    )
-                    save_img(mult_img, mult_img_path, nrow=7, padding=2)
+                    mult_img_dict_path = os.path.join(self.generate_process_dir, f"grid_mult_img{self.step}.png")
+                    save_image_dict(mult_img_dict, mult_img_dict_path)
                 # if end
                 data_start = time.time()
             # per train_loader end
             average_epoch_loss = epoch_loss / len(train_loader.dataset)
             epochs_losses.append(average_epoch_loss)
             os.makedirs(self.figure_dir, exist_ok=True)
-            loss_plot(
-                epochs_losses,
-                os.path.join(self.figure_dir, "loss.png"),
-                x_label="Epoch",
-                y_label="Loss",
-            )
-            loss_table(
-                epochs_losses,
-                os.path.join(self.figure_dir, "loss.xlsx"),
-                y1_label="Epoch",
-                y2_label="Loss",
-            )
+            loss_plot(epochs_losses, os.path.join(self.figure_dir, "loss.png"), x_label="Epoch", y_label="Loss")
+            loss_table(epochs_losses, os.path.join(self.figure_dir, "loss.xlsx"), y1_label="Epoch", y2_label="Loss")
             # per 1 epoch 计算PSNR
             if epoch % 5 == 0:
                 self.model.eval()
-                avg_psnr, avg_ssim = self.val_sample(val_loader, self.step)
-                psnr.append(avg_psnr)
-                ssim.append(avg_ssim)
-                loss_plot(
-                    psnr, os.path.join(self.figure_dir, "psnr.png"), y_label="PSNR"
-                )
-                loss_table(
-                    psnr,
-                    os.path.join(self.figure_dir, "psnr.xlsx"),
-                    y1_label="Epoch",
-                    y2_label="PSNR",
-                )
-                loss_plot(
-                    ssim, os.path.join(self.figure_dir, "ssim.png"), y_label="SSIM"
-                )
-                loss_table(
-                    ssim,
-                    os.path.join(self.figure_dir, "ssim.xlsx"),
-                    y1_label="Epoch",
-                    y2_label="SSIM",
-                )
-                self.logger_val.info(
-                    "<epoch:{:3d}, iter:{:8,d}> psnr: {:.4e} ssim: {:.4e}".format(
-                        self.start_epoch, self.step, avg_psnr, avg_ssim
+                with torch.no_grad():
+                    avg_psnr, avg_ssim = self.val_sample(val_loader, self.step)
+                    psnr.append(avg_psnr)
+                    ssim.append(avg_ssim)
+                    loss_plot(psnr, os.path.join(self.figure_dir, "psnr.png"), y_label="PSNR")
+                    loss_table(psnr, os.path.join(self.figure_dir, "psnr.xlsx"), y1_label="Epoch", y2_label="PSNR")
+                    loss_plot(ssim, os.path.join(self.figure_dir, "ssim.png"), y_label="SSIM")
+                    loss_table(ssim, os.path.join(self.figure_dir, "ssim.xlsx"), y1_label="Epoch", y2_label="SSIM")
+                    self.logger_val.info(
+                        "<epoch:{:3d}, iter:{:8,d}> psnr: {:.4e} ssim: {:.4e}".format(self.start_epoch, self.step,
+                                                                                      avg_psnr, avg_ssim)
                     )
-                )
-                if avg_psnr > best_psnr:
-                    best_psnr = avg_psnr
-                    ckpt_save_path = os.path.join(
-                        self.checkpoint_dir,
-                        self.config.data.dataset,
-                        self.args.name + "_" + "best",
-                    )
-                    self.logger.info(
-                        "Saving best_psnr models and training states in {}.".format(
-                            ckpt_save_path
+                    if avg_psnr > best_psnr:
+                        best_psnr = avg_psnr
+                        ckpt_save_path = os.path.join(self.checkpoint_dir, self.args.name + "_" + "best")
+                        self.logger.info("Saving best_psnr models and training states in {}.".format(ckpt_save_path))
+                        save_checkpoint(
+                            {
+                                "loss": epochs_losses,
+                                "psnr": psnr,
+                                "ssim": ssim,
+                                "epoch": self.start_epoch,
+                                "step": self.step,
+                                "state_dict": self.model.state_dict(),
+                                "optimizer": self.optimizer.state_dict(),
+                                "ema_helper": self.ema_helper.state_dict(),
+                                "params": self.args,
+                                "config": self.config,
+                            },
+                            filename=ckpt_save_path,
                         )
-                    )
-                    save_checkpoint(
-                        {
-                            "loss": epochs_losses,
-                            "psnr": psnr,
-                            "ssim": ssim,
-                            "epoch": self.start_epoch,
-                            "step": self.step,
-                            "state_dict": self.model.state_dict(),
-                            "optimizer": self.optimizer.state_dict(),
-                            "ema_helper": self.ema_helper.state_dict(),
-                            "params": self.args,
-                            "config": self.config,
-                        },
-                        filename=ckpt_save_path,
-                    )
             # per 100 epoch save model
             if epoch % 100 == 0:
-                ckpt_save_path = os.path.join(
-                    self.checkpoint_dir,
-                    self.config.data.dataset,
-                    self.args.name + "_" + str(self.start_epoch),
-                )
-                self.logger.info(
-                    "Saving models and training states in {}.".format(ckpt_save_path)
-                )
+                ckpt_save_path = os.path.join(self.checkpoint_dir, self.args.name + "_epoch_" + str(self.start_epoch))
+                self.logger.info("Saving models and training states in {}.".format(ckpt_save_path))
                 save_checkpoint(
                     {
                         "loss": epochs_losses,
@@ -359,12 +314,12 @@ class DDPM(object):
     ###### 第一种采样
     # q(xt|x0)
     def sample_forward(self, x0, t, eps):
-        coef1 = self.extract(self.sqrt_alphas_bar, t, x0.shape)
-        coef2 = self.extract(self.sqrt_one_minus_alphas_bar, t, x0.shape)
+        coef1 = self.extract(self.sqrt_alphas_bar, t)
+        coef2 = self.extract(self.sqrt_one_minus_alphas_bar, t)
         # if eps is None:
         #     eps = torch.randn_like(x0)
         res = coef1 * x0 + coef2 * eps
-        res = torch.clamp(res, -1,1)
+        res = torch.clamp(res, -1, 1)
         return res
 
     # q(x0|xt)

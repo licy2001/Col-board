@@ -1,5 +1,5 @@
 data:
-  dataset: "Restruction"
+  dataset: "CoCo"
   image_size: 256
   channels: 3
   num_workers: 24
@@ -13,6 +13,7 @@ path:
   figure: "figures"
   log: "logs"
   checkpoint: "checkpoint"
+  train_process: "train_process"
   test_sample: "test_sample"
   val_sample: "val_sample"
   fusion: "Fusion"

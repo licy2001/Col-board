@@ -332,6 +332,7 @@ class DDPM(object):
     ):
         with torch.no_grad():
             for t in reversed(range(self.num_timesteps)):
+                t = torch.tensor([t] * x_t.shape[0], dtype=torch.long).to(x_t.device).unsqueeze(1)
                 x_t = self.sample_backward_step(x_t, x_cond, t, simple_var, clip_x0)
         return x_t
 
@@ -343,9 +344,8 @@ class DDPM(object):
             simple_var=True,
             clip_x0=True,
     ):
-        n = x_t.shape[0]
         # t_tensor = (torch.ones(n) * t).to(x_t.device)
-        t_tensor = torch.tensor([t] * n, dtype=torch.long).to(x_t.device).unsqueeze(1)
+        t_tensor = torch.tensor([t] * x_t.shape[0], dtype=torch.long).to(x_t.device).unsqueeze(1)
         input = torch.cat([x_cond, x_t], dim=1)
         eps = self.model(input, t_tensor)
         if t == 0:

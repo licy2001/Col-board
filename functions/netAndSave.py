@@ -6,7 +6,41 @@ from matplotlib import pyplot as plt
 import pandas as pd
 import logging
 
+import matplotlib.pyplot as plt
+import numpy as np
+import torchvision.transforms as transforms
 
+def display_and_save_images(image_list, output_file, type='png'):
+    """
+    mult_img_list 是一个包含了PyTorch张量图像的列表
+    """
+    # 创建一个7x1的子图布局
+    fig, axes = plt.subplots(1, len(image_list), figsize=(20, 4))
+    # 在每个子图中显示图像
+    for i in range(len(image_list)):
+        # 如果图像在GPU上，先移动到CPU
+        img = image_list[i].cpu()
+        # 如果图像张量有批次维度，去掉批次维度
+        if img.ndim == 4 and img.shape[0] == 1:
+            img = img.squeeze(0)
+        # 转换为NumPy数组，并确保通道在最后一个维度
+        img = img.permute(1, 2, 0).numpy()
+        # 如果图像是灰度图（即只有一个通道），使用灰度色彩映射
+        if img.shape[2] == 1:
+            img = img.squeeze()
+            cmap = 'gray'
+        else:
+            cmap = None
+            # 显示图像
+        axes[i].imshow(img, cmap=cmap)
+        axes[i].axis('off')  # 关闭坐标轴
+        axes[i].set_title(f'Image {i + 1}')  # 设置标题
+    plt.savefig(output_file, type=type)
+    plt.show()
+
+# display_and_save_images(mult_img_list, 'mult_img_display.png', format='png')
+# display_and_save_images(mult_img_list, 'mult_img_display.jpg', format='jpg')
+# display_and_save_images(mult_img_list, 'mult_img_display.pdf', format='pdf')
 def setup_logger(logger_name, root, phase, level=logging.INFO, screen=False):
     '''
     set up logger

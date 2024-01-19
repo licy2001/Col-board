@@ -9,11 +9,13 @@ data:
   data_type: coco
 
 path:
+  root: "/data2/wait/bisheCode/DDPM_Fusion"
   figure: "figures"
   log: "logs"
   checkpoint: "checkpoint"
   test_sample: "test_sample"
   val_sample: "val_sample"
+  fusion: "Fusion"
 
 model:
   type: "simple"

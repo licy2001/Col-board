@@ -6,8 +6,11 @@ from matplotlib import pyplot as plt
 import pandas as pd
 import logging
 
+
 def setup_logger(logger_name, root, phase, level=logging.INFO, screen=False):
-    '''set up logger'''
+    '''
+    set up logger
+    '''
     l = logging.getLogger(logger_name)
     formatter = logging.Formatter(
         '%(asctime)s.%(msecs)03d - %(levelname)s: %(message)s', datefmt='%y-%m-%d %H:%M:%S')
@@ -20,6 +23,7 @@ def setup_logger(logger_name, root, phase, level=logging.INFO, screen=False):
         sh = logging.StreamHandler()
         sh.setFormatter(formatter)
         l.addHandler(sh)
+
 
 def loss_plot(data_list, path, x_label="Epoch", y_label="Loss"):
     plt.figure()
@@ -45,6 +49,7 @@ def loss_table(data_list, path, y1_label, y2_label):
     save_table_path = path
     # 保存为 xls 文件
     df.to_excel(save_table_path, index=False)
+
 
 def save_image(img, file_directory):
     if not os.path.exists(os.path.dirname(file_directory)):

@@ -45,6 +45,12 @@ def parse_args_and_config():
         default="Fusion",
         help="folder name to save outputs",
     )
+    parser.add_argument(
+        "--concat_type",
+        type=str,
+        default="AXB",
+        help="the concat type of condition Image",
+    )
     args = parser.parse_args()
 
     with open(os.path.join("configs", args.config), "r") as f:

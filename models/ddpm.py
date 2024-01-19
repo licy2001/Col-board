@@ -26,13 +26,6 @@ from functions.losses import noise_estimation_loss
 from functions.data_Process import data_transform, inverse_data_transform
 from functions import metrics
 
-def get_network_description(network):
-    if isinstance(network, torch.nn.DataParallel):
-        network = network.module
-    s = str(network)
-    n = sum(map(lambda x: x.numel(), network.parameters()))
-    return s, n
-
 
 def get_beta_schedule(beta_schedule, *, beta_start, beta_end, num_diffusion_timesteps):
     def sigmoid(x):
@@ -89,8 +82,8 @@ class DDPM(object):
         self.alphas_bar = torch.cumprod(self.alphas, dim=0)
         self.alphas_bar_prev = F.pad(self.alphas_bar[:-1], (1, 0), value=1.0)
         # Calculations for diffusion q(x_t | x_{t-1}) and others
-        self.sqrt_alphas_bar= torch.sqrt(self.alphas_bar)
-        self.sqrt_one_minus_alphas_bar= torch.sqrt(1.0 - self.alphas_bar)
+        self.sqrt_alphas_bar = torch.sqrt(self.alphas_bar)
+        self.sqrt_one_minus_alphas_bar = torch.sqrt(1.0 - self.alphas_bar)
         self.log_one_minus_alphas_bar = torch.log(1.0 - self.alphas_bar)
         self.sqrt_recip_alphas_bar = torch.sqrt(1.0 / self.alphas_bar)
         self.sqrt_recipm1_alphas_bar = torch.sqrt(1.0 / self.alphas_bar - 1)
@@ -111,11 +104,12 @@ class DDPM(object):
         self.logger.info(
             "Network G structure: {}, with parameters: {:,d}".format(net_struc_str, n)
         )
+
     # Get the param of given timestep t
-    def extract(self, a, t, x_shape):
+    def extract(self, a: torch.Tensor, t: torch.Tensor):
         batch_size = t.shape[0]
-        out = a.to(self.device).gather(0, t).float()
-        out = out.reshape(batch_size, *((1,) * (len(x_shape) - 1)))
+        out = a.to(self.device).gather(0, t.long()).float()
+        out = out.reshape(batch_size, 1, 1, 1)
         return out
 
     def load_ddm_ckpt(self, load_path, ema=False, train=True):
@@ -137,30 +131,18 @@ class DDPM(object):
         )
 
     def setup(self, args, config):
-        self.results_root = os.path.join(os.getcwd(), "results", "{}".format(args.name))
-        os.makedirs(self.results_root, exist_ok=True)
-        self.log_dir = os.path.join(self.results_root, config.path.log)
+        self.root_dir = os.path.join(config.path.root, "results", "{}".format(args.name))
+        os.makedirs(self.root_dir, exist_ok=True)
+        self.log_dir = os.path.join(self.root_dir, config.path.log)
         os.makedirs(self.log_dir, exist_ok=True)
+        self.figure_dir = os.path.join(self.root_dir, config.path.figure)
+        self.generate_process_dir = os.path.join(self.root_dir, "train_process")
+        self.val_sample_dir = os.path.join(self.root_dir, config.path.val_sample)
+        self.test_sample_dir = os.path.join(self.root_dir, config.path.test_sample)
+        self.checkpoint_dir = os.path.join(self.root_dir, config.path.checkpoint)
+        self.fusion_dir = os.path.join(config.path.root, config.path.fusion)
 
-        self.figure_dir = os.path.join(self.results_root, config.path.figure)
-        self.generate_process_dir = os.path.join(
-            self.results_root, "train_process"
-        )
-        self.val_sample_dir = os.path.join(
-            self.results_root, config.path.val_sample
-        )
-        self.test_sample_dir = os.path.join(
-            self.results_root, config.path.test_sample
-        )
-        self.checkpoint_dir = os.path.join(
-            self.results_root, config.path.checkpoint
-        )
-        self.fusion_dir = os.getcwd()
-        os.makedirs(self.checkpoint_dir, exist_ok=True)
-
-        setup_logger(
-            None, self.log_dir, "train", level=logging.INFO, screen=True
-        )
+        setup_logger(None, self.log_dir, "train", level=logging.INFO, screen=True)
         setup_logger("val", self.log_dir, "val", level=logging.INFO)
         self.logger = logging.getLogger("base")
         self.logger_val = logging.getLogger("val")
@@ -170,31 +152,37 @@ class DDPM(object):
         if symmetric:
             if big_range:
                 # 生成整数的范围更大
-                t = torch.randint(
-                    low=0, high=self.num_timesteps, size=(n // 2 + 1,)
-                ).to(self.device)
+                t = torch.randint(low=0, high=self.num_timesteps, size=(n // 2 + 1,)).to(self.device)
                 t = torch.cat([t, self.num_timesteps - t - 1], dim=0)[:n]
             else:
-                t = torch.randint(
-                    low=0, high=self.num_timesteps // 2, size=(n // 2 + 1,)
-                ).to(self.device)
+                t = torch.randint(low=0, high=self.num_timesteps // 2, size=(n // 2 + 1,)).to(self.device)
                 t = torch.cat([t, self.num_timesteps - t - 1], dim=0)[:n]
         else:
-            t = torch.randint(low=0, high=self.num_timesteps, size=(n,)).to(
-                self.device
-            )  # 生成n个随机时间步骤
+            t = torch.randint(low=0, high=self.num_timesteps, size=(n,)).to(self.device)  # 生成n个随机时间步骤
         return t
 
-    def get_loss(self, x0, x_cond, t):
+    def get_loss(self, x0, x_cond):
+        """
+        计算MSE损失
+        """
+        t = self.sample_timestep(x0.shape[0], symmetric=False, big_range=True)
         eps = torch.randn_like(x0).to(self.device)
         xt = self.sample_forward(x0, t, eps)
-        eps_theta = self.model(torch.cat([x_cond, xt], dim=1), t.float())
-        alpha_bar = self.alpha_bar[t].reshape(-1, 1, 1, 1)
-        pred_x0 = (xt - torch.sqrt(1 - alpha_bar) * eps_theta) / torch.sqrt(alpha_bar)
-        pred_x0 = torch.clip(pred_x0, -1, 1)
-        loss_fn = torch.nn.MSELoss()
+        if self.args.concat_type == "ABX":
+            model_input = torch.cat([x_cond, xt], dim=1)
+        elif self.args.concat_type == "AXB":
+            model_input = torch.cat([x_cond[:, :3, :, :], xt, x_cond[:, 3:, :, :]], dim=1)
+        else:
+            model_input = torch.cat([xt, x_cond], dim=1)
+
+        eps_theta = self.model(model_input,t)
+        x0_coef1 = self.extract(self.sqrt_recip_alphas_bar, t)
+        x0_coef2 = self.extract(self.sqrt_one_minus_alphas_bar, t)
+        pred_x0 = x0_coef1 * (xt - x0_coef2 * eps_theta)
+        pred_x0 = torch.clamp(pred_x0, -1, 1)
+        loss_fn = torch.nn.MSELoss(size_average=False, reduce=True, reduction="sum")
         loss = loss_fn(eps_theta, eps)
-        return loss, xt, eps_theta, pred_x0
+        return loss, xt, eps, eps_theta, pred_x0
 
     def train(self, DATASET):
         cudnn.benchmark = True
@@ -213,7 +201,6 @@ class DDPM(object):
             data_time = 0
             epoch_loss = 0.0
             epoch_start_time = time.time()
-            epoch_time = 0.0
             for i, (x, y) in enumerate(tqdm(train_loader)):
                 self.step += 1
                 # print("input shape:", x.shape)
@@ -227,17 +214,13 @@ class DDPM(object):
 
                 x = x.to(self.device)
                 x = data_transform(x)
-                e = torch.randn_like(x[:, :3, :, :])
-                b = self.betas
-
                 # antithetic sampling
-                t = self.sample_timestep(n, big_range=False)
                 x0 = x[:, 6:, :, :]
                 x_cond = x[:, :6, :, :]
                 # loss, x_t, pred_noise, pred_x0 = noise_estimation_loss(
                 #     self.model, x0, x_cond, t, e, b
                 # )
-                loss, x_t, pred_noise, pred_x0 = self.get_loss(x0, x_cond, t)
+                loss, x_t, pred_noise, pred_x0 = self.get_loss(x0=x0, x_cond=x_cond)
                 self.logger.info(
                     f"step: {self.step}\tloss: {loss.item():.8f}\tdata time: {data_time / (i + 1):.4f}"
                 )
@@ -375,11 +358,13 @@ class DDPM(object):
 
     ###### 第一种采样
     # q(xt|x0)
-    def sample_forward(self, x0, t, eps=None):
-        alpha_bar = self.alpha_bar[t].reshape(-1, 1, 1, 1)
-        if eps is None:
-            eps = torch.randn_like(x0)
-        res = eps * torch.sqrt(1 - alpha_bar) + torch.sqrt(alpha_bar) * x0
+    def sample_forward(self, x0, t, eps):
+        coef1 = self.extract(self.sqrt_alphas_bar, t, x0.shape)
+        coef2 = self.extract(self.sqrt_one_minus_alphas_bar, t, x0.shape)
+        # if eps is None:
+        #     eps = torch.randn_like(x0)
+        res = coef1 * x0 + coef2 * eps
+        res = torch.clamp(res, -1,1)
         return res
 
     # q(x0|xt)
@@ -767,3 +752,8 @@ class DDPM(object):
                     os.path.join(image_folder, "vi", y[i]),
                 )
                 loader.set_description("{} | {}".format(self.args.name, y[i]))
+
+
+if __name__ == '__main__':
+    path = os.path.join(os.getcwd(), "test")
+    print(path)

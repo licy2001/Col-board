@@ -125,3 +125,70 @@ class RestructionDataset(torch.utils.data.Dataset):
             dim=0,
         )
         return (res, img_id)
+
+
+# 融合数据集
+class Fusion:
+    def __init__(self, config):
+        self.config = config
+        self.transforms = torchvision.transforms.Compose(
+            [
+                torchvision.transforms.ToTensor(),
+                # torchvision.transforms.Lambda(lambda x: (x - 0.5) * 2),
+            ]
+        )
+
+    def get_fusion_loaders(self, parent_dir, data_type, batch_size, num_works=24):
+        print("=> Utilizing the RestructionDataset() for fusion data loading...")
+        fusion_dataset = FusionDataset(
+            dir=parent_dir,
+            transforms=self.transforms,
+            data_type=data_type,
+        )
+
+        fusion_loader = torch.utils.data.DataLoader(
+            fusion_dataset,
+            batch_size= batch_size,
+            shuffle=False,
+            num_workers=num_works,
+            pin_memory=True,
+            drop_last=True,
+        )
+        return fusion_loader
+class FusionDataset(torch.utils.data.Dataset):
+    def __init__(self, dir, transforms, data_type="coco"):
+        super().__init__()
+        # if data_type == "coco":
+        ir_path = os.path.join(dir, "ir")
+        vi_path = os.path.join(dir, "vi")
+        # elif data_type == ""
+
+        ir_names, vi_names = [], []
+        file_list = natsorted(os.listdir(ir_path))
+        for item in file_list:
+            if item.endswith(".jpg") or item.endswith(".png") or item.endswith(".bmp"):
+                ir_names.append(os.path.join(ir_path, item))
+                vi_names.append(os.path.join(vi_path, item))
+        # print("The number of the training dataset is: {}".format(len(gt_names)))
+
+        self.ir_names = ir_names
+        self.vi_names = vi_names
+        self.transforms = transforms
+
+    def __len__(self):
+        return len(self.ir_names)
+
+    def __getitem__(self, idx):
+        ir_name = self.ir_names[idx]
+        vi_name = self.vi_names[idx]
+        img_id = re.split("/", ir_name)[-1]
+        ir_img = Image.open(ir_name).convert("RGB")
+        vi_img = Image.open(vi_name).convert("RGB")
+        res = torch.cat(
+            [
+                self.transforms(ir_img),
+                self.transforms(vi_img),
+            ],
+            dim=0,
+        )
+        return (res, img_id)

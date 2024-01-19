@@ -148,13 +148,15 @@ class Fusion:
 
         fusion_loader = torch.utils.data.DataLoader(
             fusion_dataset,
-            batch_size= batch_size,
+            batch_size=batch_size,
             shuffle=False,
             num_workers=num_works,
             pin_memory=True,
             drop_last=True,
         )
         return fusion_loader
+
+
 class FusionDataset(torch.utils.data.Dataset):
     def __init__(self, dir, transforms, data_type="coco"):
         super().__init__()

@@ -29,7 +29,6 @@ from functions import logger
 from functions import metrics
 
 
-
 def torch2hwcuint8(x, clip=False):
     if clip:
         x = torch.clamp(x, -1, 1)
@@ -51,13 +50,13 @@ def get_beta_schedule(beta_schedule, *, beta_start, beta_end, num_diffusion_time
 
     if beta_schedule == "quad":
         betas = (
-            np.linspace(
-                beta_start**0.5,
-                beta_end**0.5,
-                num_diffusion_timesteps,
-                dtype=np.float64,
-            )
-            ** 2
+                np.linspace(
+                    beta_start ** 0.5,
+                    beta_end ** 0.5,
+                    num_diffusion_timesteps,
+                    dtype=np.float64,
+                )
+                ** 2
         )
     elif beta_schedule == "linear":
         betas = np.linspace(
@@ -114,7 +113,7 @@ class DDPM(object):
         self.alphas = alphas
         self.alpha_bar = alpha_bar
         alpha_bar_prev = torch.empty_like(alpha_bar)
-        alpha_bar_prev[1:] = alpha_bar[0 : self.num_timesteps - 1]
+        alpha_bar_prev[1:] = alpha_bar[0: self.num_timesteps - 1]
         alpha_bar_prev[0] = 1
         # mu_theta_t 的系数
         self.coef1 = torch.sqrt(self.alphas) * (1 - alpha_bar_prev) / (1 - alpha_bar)
@@ -130,71 +129,52 @@ class DDPM(object):
             "Network G structure: {}, with parameters: {:,d}".format(net_struc_str, n)
         )
 
-    def load_ddm_ckpt(self, load_path, ema=False):
+    def load_ddm_ckpt(self, load_path, ema=False, train=True):
         print("checkpoint path:", load_path)
         checkpoint = load_checkpoint(load_path, None)
         self.start_epoch = checkpoint["epoch"]
         self.step = checkpoint["step"]
         self.model.load_state_dict(checkpoint["state_dict"], strict=True)
-        self.optimizer.load_state_dict(checkpoint["optimizer"])
-        self.ema_helper.load_state_dict(checkpoint["ema_helper"])
+        if train:
+            self.optimizer.load_state_dict(checkpoint["optimizer"])
+            self.ema_helper.load_state_dict(checkpoint["ema_helper"])
         if ema:
             self.ema_helper.ema(self.model)
             self.ema_helper.register(self.model)
         self.logger.info(
             "=> loaded checkpoint '{}' (epoch {}, step {})".format(
-                load_path, checkpoint["epoch"], self.step
+                load_path, self.start_epoch, self.step
             )
         )
 
     def setup(self, args, config):
-        if args.phase == "train":
-            self.experiments_root = os.path.join("experiments", "{}".format(args.name))
-            # self.experiments_root = os.path.join(
-            #     config.path.experiments_root, "{}".format(args.name)
-            # )
-            self.figure_dir = os.path.join(self.experiments_root, config.path.figure)
-            self.generate_process_dir = os.path.join(
-                self.experiments_root, config.path.train_generate_process
-            )
-            self.val_results_dir = os.path.join(
-                self.experiments_root, config.path.val_results
-            )
-            self.log_dir = os.path.join(self.experiments_root, config.path.log)
-            self.results_dir = os.path.join(self.experiments_root, config.path.results)
-            self.checkpoint_dir = os.path.join(
-                self.experiments_root, config.path.checkpoint
-            )
-            self.test_generate = os.path.join(
-                self.experiments_root, config.path.test_generate
-            )
-            os.makedirs(self.log_dir, exist_ok=True)
-            os.makedirs(self.results_dir, exist_ok=True)
-            os.makedirs(self.checkpoint_dir, exist_ok=True)
+        self.experiments_root = os.path.join("results", "{}".format(args.name))
+        os.makedirs(self.experiments_root, exist_ok=True)
+        self.log_dir = os.path.join(self.experiments_root, config.path.log)
+        os.makedirs(self.log_dir, exist_ok=True)
 
-            logger.setup_logger(
-                None, self.log_dir, "train", level=logging.INFO, screen=True
-            )
-            logger.setup_logger("val", self.log_dir, "val", level=logging.INFO)
-            self.logger = logging.getLogger("base")
-            self.logger_val = logging.getLogger("val")
-        else:
-            self.experiments_root = os.path.join("experiments", "{}".format(args.name))
+        self.figure_dir = os.path.join(self.experiments_root, config.path.figure)
+        self.generate_process_dir = os.path.join(
+            self.experiments_root, config.path.generate_process
+        )
+        self.val_sample_dir = os.path.join(
+            self.experiments_root, config.path.val_sample
+        )
+        self.test_sample_dir = os.path.join(
+            self.experiments_root, config.path.test_sample
+        )
+        self.checkpoint_dir = os.path.join(
+            self.experiments_root, config.path.checkpoint
+        )
+        self.fusion_dir = os.getcwd()
+        os.makedirs(self.checkpoint_dir, exist_ok=True)
 
-            self.log_dir = os.path.join(self.experiments_root, config.path.log)
-            self.val_results_dir = os.path.join(
-                self.experiments_root, config.path.val_results
-            )
-
-            os.makedirs(self.log_dir, exist_ok=True)
-            os.makedirs(self.results_dir, exist_ok=True)
-
-            logger.setup_logger(
-                None, self.log_dir, "train", level=logging.INFO, screen=True
-            )
-            logger.setup_logger("val", self.log_dir, "val", level=logging.INFO)
-            self.logger = logging.getLogger("base")
-            self.logger_val = logging.getLogger("val")  # validation logger
+        logger.setup_logger(
+            None, self.log_dir, "train", level=logging.INFO, screen=True
+        )
+        logger.setup_logger("val", self.log_dir, "val", level=logging.INFO)
+        self.logger = logging.getLogger("base")
+        self.logger_val = logging.getLogger("val")
 
     # 生成时间步
     def sample_timestep(self, n, symmetric=True, big_range=True):
@@ -231,7 +211,7 @@ class DDPM(object):
         cudnn.benchmark = True
         train_loader, val_loader = DATASET.get_loaders()
         if os.path.isfile(self.args.resume):
-            self.load_ddm_ckpt(self.args.resume, ema=True)
+            self.load_ddm_ckpt(self.args.resume, ema=True, train=True)
 
         best_psnr = 0
         epochs_losses = self.epochs_loss
@@ -270,7 +250,7 @@ class DDPM(object):
                 # )
                 loss, x_t, pred_noise, pred_x0 = self.get_loss(x0, x_cond, t)
                 self.logger.info(
-                    f"step: {self.step}\tloss: {loss.item():.8f}\tdata time: {data_time / (i+1):.4f}"
+                    f"step: {self.step}\tloss: {loss.item():.8f}\tdata time: {data_time / (i + 1):.4f}"
                 )
                 # 模型参数更新
                 self.optimizer.zero_grad()
@@ -415,11 +395,11 @@ class DDPM(object):
 
     # q(x0|xt)
     def sample_backward(
-        self,
-        x_t,
-        x_cond,
-        simple_var=True,
-        clip_x0=True,
+            self,
+            x_t,
+            x_cond,
+            simple_var=True,
+            clip_x0=True,
     ):
         with torch.no_grad():
             for t in reversed(range(self.num_timesteps)):
@@ -427,12 +407,12 @@ class DDPM(object):
         return x_t
 
     def sample_backward_step(
-        self,
-        x_t,
-        x_cond,
-        t,
-        simple_var=True,
-        clip_x0=True,
+            self,
+            x_t,
+            x_cond,
+            t,
+            simple_var=True,
+            clip_x0=True,
     ):
         n = x_t.shape[0]
         # t_tensor = (torch.ones(n) * t).to(x_t.device)
@@ -446,9 +426,9 @@ class DDPM(object):
                 var = self.betas[t]
             else:
                 var = (
-                    (1 - self.alpha_bar[t - 1])
-                    / (1 - self.alpha_bar[t])
-                    * self.betas[t]
+                        (1 - self.alpha_bar[t - 1])
+                        / (1 - self.alpha_bar[t])
+                        * self.betas[t]
                 )
             noise = torch.randn_like(x_t)
             noise *= torch.sqrt(var)
@@ -461,8 +441,8 @@ class DDPM(object):
             mean = self.coef1[t] * x_t + self.coef2[t] * x_0
         else:
             mean = (
-                x_t - (1 - self.alphas[t]) / torch.sqrt(1 - self.alpha_bar[t]) * eps
-            ) / torch.sqrt(self.alphas[t])
+                           x_t - (1 - self.alphas[t]) / torch.sqrt(1 - self.alpha_bar[t]) * eps
+                   ) / torch.sqrt(self.alphas[t])
         x_t = mean + noise
 
         return x_t
@@ -494,7 +474,7 @@ class DDPM(object):
 
                 x0_preds.append(x_0.to("cpu"))
                 c1 = eta * ((1 - at / at_next) * (1 - at_next) / (1 - at)).sqrt()
-                c2 = ((1 - at_next) - c1**2).sqrt()
+                c2 = ((1 - at_next) - c1 ** 2).sqrt()
                 xt_next = at_next.sqrt() * x_0 + c1 * torch.randn_like(x_0) + c2 * et
                 xs.append(xt_next.to("cpu"))
         return xs, x0_preds
@@ -521,9 +501,9 @@ class DDPM(object):
                 x0_from_e = torch.clamp(x0_from_e, -1, 1)
                 x0_preds.append(x0_from_e.to("cpu"))
                 mean_eps = (
-                    (atm1.sqrt() * beta_t) * x0_from_e
-                    + ((1 - beta_t).sqrt() * (1 - atm1)) * x
-                ) / (1.0 - at)
+                                   (atm1.sqrt() * beta_t) * x0_from_e
+                                   + ((1 - beta_t).sqrt() * (1 - atm1)) * x
+                           ) / (1.0 - at)
 
                 mean = mean_eps
                 noise = torch.randn_like(x)
@@ -536,12 +516,12 @@ class DDPM(object):
 
     # 采样一张图片
     def sample_image(
-        self,
-        x_cond,
-        xt,
-        last=True,
-        sample_type="generalized",
-        skip_type="uniform",
+            self,
+            x_cond,
+            xt,
+            last=True,
+            sample_type="generalized",
+            skip_type="uniform",
     ):
         """
         sample_type:采样类型 generalized 和 ddpm_noisy
@@ -553,10 +533,10 @@ class DDPM(object):
                 seq = range(0, self.num_timesteps, skip)
             elif skip_type == "quad":
                 seq = (
-                    np.linspace(
-                        0, np.sqrt(self.num_timesteps * 0.8), self.args.timesteps
-                    )
-                    ** 2
+                        np.linspace(
+                            0, np.sqrt(self.num_timesteps * 0.8), self.args.timesteps
+                        )
+                        ** 2
                 )
                 seq = [int(s) for s in list(seq)]
 
@@ -567,10 +547,10 @@ class DDPM(object):
                 seq = range(0, self.num_timesteps, skip)
             elif skip_type == "quad":
                 seq = (
-                    np.linspace(
-                        0, np.sqrt(self.num_timesteps * 0.8), self.args.timesteps
-                    )
-                    ** 2
+                        np.linspace(
+                            0, np.sqrt(self.num_timesteps * 0.8), self.args.timesteps
+                        )
+                        ** 2
                 )
                 seq = [int(s) for s in list(seq)]
 
@@ -608,7 +588,7 @@ class DDPM(object):
     def val_sample(self, val_loader, epoch):
         self.model.eval()
         image_floder = image_folder = os.path.join(
-            self.val_results_dir, "{:04d}".format(epoch)
+            self.val_sample_dir, "epoch_{:04d}".format(epoch)
         )
         os.makedirs(image_floder, exist_ok=True)
 
@@ -674,26 +654,15 @@ class DDPM(object):
         return avg_psnr, avg_ssim
 
     # 对测试集进行采样
-    def test_load_ddpm_ckpt(self, load_path, ema=False):
-        checkpoint = load_checkpoint(load_path, None)
-        self.start_epoch = checkpoint["epoch"]
-        self.step = checkpoint["step"]
-        self.model.load_state_dict(checkpoint["state_dict"], strict=True)
-        self.logger.info(
-            "=> loaded checkpoint '{}' (epoch {}, step {})".format(
-                load_path, self.start_epoch, self.step
-            )
-        )
-
     def test_sample(self, test_loader, type):
         """
         type: 路径名
         """
-        self.test_load_ddpm_ckpt(self.args.resume)
+        self.load_ddm_ckpt(self.args.resume, ema=False, train=False)
         self.model.eval()
-        image_folder = self.sample_test_imag
+        image_folder = self.test_sample_dir
         with torch.no_grad():
-            self.logger.info(f"Processing test images at step: {self.epoch}")
+            self.logger.info(f"Processing test images at step: {self.start_epoch}")
         test_loader1 = tqdm(test_loader)
         for _, (x, y) in enumerate(test_loader1):
             x = x.flatten(start_dim=0, end_dim=1) if x.ndim == 5 else x
@@ -732,27 +701,80 @@ class DDPM(object):
                     nrow=3,
                     padding=2,
                 )
+                os.makedirs(os.path.join(image_folder, type, "pred"), exist_ok=True)
                 save_image(pred_x[i], os.path.join(image_folder, type, "pred", y[i]))
+                os.makedirs(os.path.join(image_folder, type, "cond1"), exist_ok=True)
                 save_image(
                     x_cond[:, :3, :, :][i],
-                    os.path.join(image_folder, type, "ir", y[i]),
+                    os.path.join(image_folder, type, "cond1", y[i]),
                 )
+                os.makedirs(os.path.join(image_folder, type, "cond2"), exist_ok=True)
                 save_image(
                     x_cond[:, 3:, :, :][i],
-                    os.path.join(image_folder, type, "vi", y[i]),
+                    os.path.join(image_folder, type, "cond2", y[i]),
                 )
                 test_loader1.set_description("{} | {}".format(self.args.name, y[i]))
 
     # 采样融合结果
-    def fusion_load_ddpm_ckpt(self, load_path, ema=False):
-        checkpoint = load_checkpoint(load_path, None)
-        self.start_epoch = checkpoint["epoch"]
-        self.step = checkpoint["step"]
-        self.model.load_state_dict(checkpoint["state_dict"], strict=True)
-        self.logger.info(
-            "=> loaded checkpoint '{}' (epoch {}, step {})".format(
-                load_path, self.start_epoch, self.step
+    def Fusion_sample(self, fusion_loader, type):
+        """
+        type: 路径名
+        """
+        self.load_ddm_ckpt(self.args.resume, ema=False, train=False)
+        image_folder = os.path.join(self.fusion_dir, type)
+        os.makedirs(image_folder, exist_ok=True)
+
+        self.model.eval()
+        with torch.no_grad():
+            self.logger.info(f"Processing test images at step: {self.start_epoch}")
+        loader = tqdm(fusion_loader)
+        for _, (x, y) in enumerate(loader):
+            x = x.flatten(start_dim=0, end_dim=1) if x.ndim == 5 else x
+            n = x.shape[0]
+            x_cond = x[:, :6, :, :].to(self.device)
+            x_cond = data_transform(x_cond)
+            shape = x_cond[:, :3, :, :].shape
+            xt = torch.randn(shape, device=self.device)
+            # 第一个办法
+            pred_x = self.sample_image(
+                x_cond,
+                xt,
+                last=True,
+                sample_type="generalized",
+                skip_type="uniform",
             )
-        )
-    def Fusion_sample(self):
-        pass
+            # 第二个办法
+            # pred_x = self.sample_backward(
+            #     x_t=x, x_cond=x_cond, simple_var=True, clip_x0=True
+            # )
+            pred_x = torch.clip(pred_x, -1, 1)
+            pred_x = inverse_data_transform(pred_x)
+            x_cond = inverse_data_transform(x_cond)
+
+            for i in range(n):
+                ml_img = [
+                    x_cond[i, :3, :, :].detach().float().cpu(),
+                    x_cond[i, 3:, :, :].detach().float().cpu(),
+                    pred_x[i].detach().float().cpu(),
+                ]
+                ml_img = make_grid(ml_img, nrow=3, padding=2)
+                os.makedirs(os.path.join(image_folder, "grid"), exist_ok=True)
+                save_img(
+                    ml_img,
+                    os.path.join(image_folder, "grid", y[i]),
+                    nrow=3,
+                    padding=2,
+                )
+                os.makedirs(os.path.join(image_folder, "pred"), exist_ok=True)
+                save_image(pred_x[i], os.path.join(image_folder, type, "pred", y[i]))
+                os.makedirs(os.path.join(image_folder, "ir"), exist_ok=True)
+                save_image(
+                    x_cond[:, :3, :, :][i],
+                    os.path.join(image_folder, "ir", y[i]),
+                )
+                os.makedirs(os.path.join(image_folder, "vi"), exist_ok=True)
+                save_image(
+                    x_cond[:, 3:, :, :][i],
+                    os.path.join(image_folder, "vi", y[i]),
+                )
+                loader.set_description("{} | {}".format(self.args.name, y[i]))

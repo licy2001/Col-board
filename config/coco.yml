@@ -1,0 +1,62 @@
+data:
+  dataset: "Restruction"
+  image_size: 256
+  channels: 3
+  num_workers: 24
+  rescaled: true
+  data_dir: "/data2/wait/bisheCode/DDPM_Fusion/dataset/TXCJ"
+  # MSRS_test: "/data2/wait/bisheCode/DRMF/data/MSRSCrop"
+  # "/data2/wait/bisheCode/DRMF/data/LLVIP"
+  # TNO3ch_test: "/data2/wait/bisheCode/DRMF/data/TNO_3ch"
+  Fusion_test: "/data2/wait/bisheCode/DRMF/data/TNO_3ch"
+  conditional: True
+  data_type: coco
+
+path:
+  experiments_root: "/data2/wait/bisheCode/DDPM_Fusion/experiments"
+  figure: "figures"
+  log: "logs"
+  train_generate_process: "generate_process"
+  tb_logger: "tb_logger"
+  results: "results"
+  checkpoint: "checkpoint"
+  val_sample: "val_sample"
+  test_generate: "test_generate"
+  val_results: "val_sample"
+model:
+  type: "simple"
+  in_channels: 9
+  out_ch: 3
+  ch: 128
+  ch_mult: [1, 2, 3, 4]
+  num_res_blocks: 2
+  attn_resolutions: [32] # 16
+  dropout: 0.0
+  ema_rate: 0.999
+  ema: True
+  resamp_with_conv: True
+
+diffusion:
+  beta_schedule: linear
+  beta_start: 0.0001
+  beta_end: 0.02
+  num_diffusion_timesteps: 1000
+
+training:
+  batch_size: 4
+  n_epochs: 10000
+  epoch_freq: 100
+  compute_epoch_freq: 1
+  ckpt_freq: 20000
+
+sampling:
+  batch_size: 4
+  last_only: True
+
+optim:
+  weight_decay: 0.000
+  optimizer: "Adam"
+  lr: 0.00002
+  amsgrad: False
+  eps: 0.00000001
+  beta1: 0.9

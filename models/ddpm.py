@@ -3,14 +3,12 @@ import os, sys
 sys.path.append("/data2/wait/bisheCode/DDPM_Fusion")
 import logging
 import time
-import glob
 import numpy as np
 from tqdm import tqdm
 import torch
-import torch.nn as nn
+import torch.nn.functional as F
 from torchvision.utils import make_grid
 from torchvision.utils import save_image as save_img
-import torch.utils.data as data
 import torch.backends.cudnn as cudnn
 from models.unet import UNet
 from models.ema import EMAHelper
@@ -21,20 +19,12 @@ from functions.netAndSave import (
     get_network_description,
     loss_plot,
     loss_table,
+    setup_logger,
 )
 from functions.get_Optimizer import get_optimizer
 from functions.losses import noise_estimation_loss
 from functions.data_Process import data_transform, inverse_data_transform
-from functions import logger
 from functions import metrics
-
-
-def torch2hwcuint8(x, clip=False):
-    if clip:
-        x = torch.clamp(x, -1, 1)
-    x = (x + 1.0) / 2.0
-    return x
-
 
 def get_network_description(network):
     if isinstance(network, torch.nn.DataParallel):
@@ -86,7 +76,7 @@ class DDPM(object):
         self.model.to(self.device)
         gpus = [1]
         self.model = torch.nn.DataParallel(self.model)
-        self.ema_helper = EMAHelper()
+        self.ema_helper = EMAHelper(mu=self.config.model.ema_rate)
         self.ema_helper.register(self.model)
 
         self.optimizer = get_optimizer(self.config, self.model.parameters())
@@ -101,26 +91,27 @@ class DDPM(object):
         )
 
         # 参数
-        betas = torch.from_numpy(betas).float().to(self.device)
+        self.betas = torch.from_numpy(betas).float().to(self.device)
         self.num_timesteps = betas.shape[0]
-        alphas = 1.0 - betas
-        alpha_bar = torch.empty_like(alphas)
-        product = 1
-        for i, alpha in enumerate(alphas):
-            product *= alpha
-            alpha_bar[i] = product
-        self.betas = betas
-        self.alphas = alphas
-        self.alpha_bar = alpha_bar
-        alpha_bar_prev = torch.empty_like(alpha_bar)
-        alpha_bar_prev[1:] = alpha_bar[0: self.num_timesteps - 1]
-        alpha_bar_prev[0] = 1
-        # mu_theta_t 的系数
-        self.coef1 = torch.sqrt(self.alphas) * (1 - alpha_bar_prev) / (1 - alpha_bar)
-        self.coef2 = torch.sqrt(alpha_bar_prev) * self.betas / (1 - alpha_bar)
+        self.alphas = 1.0 - betas
+        self.alphas_bar = torch.cumprod(self.alphas, dim=0)
+        self.alphas_bar_prev = F.pad(self.alphas_bar[:-1], (1, 0), value=1.0)
+        # Calculations for diffusion q(x_t | x_{t-1}) and others
+        self.sqrt_alphas_bar= torch.sqrt(self.alphas_bar)
+        self.sqrt_one_minus_alphas_bar= torch.sqrt(1.0 - self.alphas_bar)
+        self.log_one_minus_alphas_bar = torch.log(1.0 - self.alphas_bar)
+        self.sqrt_recip_alphas_bar = torch.sqrt(1.0 / self.alphas_bar)
+        self.sqrt_recipm1_alphas_bar = torch.sqrt(1.0 / self.alphas_bar - 1)
+        # Calculations for posterior q(x_{t-1} | x_t, x_0)
+        self.p_variance = (
+                self.betas * (1.0 - self.alphas_bar_prev) / (1.0 - self.alphas_bar)
+        )
+        self.p_log_variance_clipped = torch.log(self.p_variance.clamp(min=1e-20))
 
-        # alphas_cumprod = alphas.cumprod(dim=0) # 计算量大
-        posterior_variance = betas * (1.0 - alpha_bar_prev) / (1.0 - alpha_bar)
+        # mu_theta_t 的系数
+        self.p_mean_coef1 = self.sqrt_alphas_bar * (1 - self.alphas_bar_prev) / (1 - self.alphas_bar)
+        self.p_mean_coef2 = torch.sqrt(self.alphas_bar_prev) * self.betas / (1 - self.alphas_bar)
+
         # setup:初始化操作
         self.setup(self.args, self.config)
         s, n = get_network_description(self.model)
@@ -128,6 +119,12 @@ class DDPM(object):
         self.logger.info(
             "Network G structure: {}, with parameters: {:,d}".format(net_struc_str, n)
         )
+    # Get the param of given timestep t
+    def extract(self, a, t, x_shape):
+        batch_size = t.shape[0]
+        out = a.to(self.device).gather(0, t).float()
+        out = out.reshape(batch_size, *((1,) * (len(x_shape) - 1)))
+        return out
 
     def load_ddm_ckpt(self, load_path, ema=False, train=True):
         print("checkpoint path:", load_path)
@@ -148,31 +145,31 @@ class DDPM(object):
         )
 
     def setup(self, args, config):
-        self.experiments_root = os.path.join("results", "{}".format(args.name))
-        os.makedirs(self.experiments_root, exist_ok=True)
-        self.log_dir = os.path.join(self.experiments_root, config.path.log)
+        self.results_root = os.path.join(os.getcwd(), "results", "{}".format(args.name))
+        os.makedirs(self.results_root, exist_ok=True)
+        self.log_dir = os.path.join(self.results_root, config.path.log)
         os.makedirs(self.log_dir, exist_ok=True)
 
-        self.figure_dir = os.path.join(self.experiments_root, config.path.figure)
+        self.figure_dir = os.path.join(self.results_root, config.path.figure)
         self.generate_process_dir = os.path.join(
-            self.experiments_root, config.path.generate_process
+            self.results_root, "train_process"
         )
         self.val_sample_dir = os.path.join(
-            self.experiments_root, config.path.val_sample
+            self.results_root, config.path.val_sample
         )
         self.test_sample_dir = os.path.join(
-            self.experiments_root, config.path.test_sample
+            self.results_root, config.path.test_sample
         )
         self.checkpoint_dir = os.path.join(
-            self.experiments_root, config.path.checkpoint
+            self.results_root, config.path.checkpoint
         )
         self.fusion_dir = os.getcwd()
         os.makedirs(self.checkpoint_dir, exist_ok=True)
 
-        logger.setup_logger(
+        setup_logger(
             None, self.log_dir, "train", level=logging.INFO, screen=True
         )
-        logger.setup_logger("val", self.log_dir, "val", level=logging.INFO)
+        setup_logger("val", self.log_dir, "val", level=logging.INFO)
         self.logger = logging.getLogger("base")
         self.logger_val = logging.getLogger("val")
 
@@ -461,7 +458,7 @@ class DDPM(object):
             xs = [xt]
             for i, j in zip(reversed(seq), reversed(seq_next)):
                 t = (torch.ones(n) * i).to(xt.device)
-                print(t.shape)
+                # print(t.shape)
                 next_t = (torch.ones(n) * j).to(xt.device)
                 at = self.compute_alpha(b, t.long())
                 at_next = self.compute_alpha(b, next_t.long())

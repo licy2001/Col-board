@@ -63,7 +63,6 @@ def dict2namespace(config):
         setattr(namespace, key, new_value)
     return namespace
 
-
 def main():
     args, config = parse_args_and_config()
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_ids
@@ -89,7 +88,7 @@ def main():
     DATASET = Fusion(config)
 
     dataloader = DATASET.get_fusion_loaders(
-        fusion_data_dir=Fusion_data,
+        parent_dir=Fusion_data,
         data_type="LLVIP",
         batch_size=1,
     )

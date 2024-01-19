@@ -36,30 +36,22 @@ def get_network_description(network):
 
 def get_beta_schedule(beta_schedule, *, beta_start, beta_end, num_diffusion_timesteps):
     def sigmoid(x):
-        return 1 / (np.exp(-x) + 1)
+        return 1 / (torch.exp(-x) + 1)
 
     if beta_schedule == "quad":
-        betas = (
-                np.linspace(
-                    beta_start ** 0.5,
-                    beta_end ** 0.5,
-                    num_diffusion_timesteps,
-                    dtype=np.float64,
-                )
-                ** 2
-        )
+        betas = (torch.linspace(beta_start ** 0.5, beta_end ** 0.5, num_diffusion_timesteps, dtype=torch.float64) ** 2)
     elif beta_schedule == "linear":
-        betas = np.linspace(
-            beta_start, beta_end, num_diffusion_timesteps, dtype=np.float64
+        betas = torch.linspace(
+            beta_start, beta_end, num_diffusion_timesteps, dtype=torch.float64
         )
     elif beta_schedule == "const":
-        betas = beta_end * np.ones(num_diffusion_timesteps, dtype=np.float64)
+        betas = beta_end * torch.ones(num_diffusion_timesteps, dtype=torch.float64)
     elif beta_schedule == "jsd":  # 1/T, 1/(T-1), 1/(T-2), ..., 1
         betas = 1.0 / np.linspace(
             num_diffusion_timesteps, 1, num_diffusion_timesteps, dtype=np.float64
         )
     elif beta_schedule == "sigmoid":
-        betas = np.linspace(-6, 6, num_diffusion_timesteps)
+        betas = torch.linspace(-6, 6, num_diffusion_timesteps)
         betas = sigmoid(betas) * (beta_end - beta_start) + beta_start
     else:
         raise NotImplementedError(beta_schedule)
@@ -91,7 +83,7 @@ class DDPM(object):
         )
 
         # 参数
-        self.betas = torch.from_numpy(betas).float().to(self.device)
+        self.betas = betas
         self.num_timesteps = betas.shape[0]
         self.alphas = 1.0 - betas
         self.alphas_bar = torch.cumprod(self.alphas, dim=0)

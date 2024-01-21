@@ -373,7 +373,7 @@ class DDPM(object):
             x_0 = torch.clip(x_0, -1, 1)
             mean = self.p_mean_coef1[t] * xt + self.p_mean_coef2[t] * x_0
         else:
-            mu_coef1 = 1 / self.extract(self.sqrt_alphas)
+            mu_coef1 = 1 / self.extract(self.sqrt_alphas, t)
             mu_coef2 = (1 - self.extract(self.alphas, t)) / self.extract(self.sqrt_one_minus_alphas_bar, t)
             mean = mu_coef1 * (xt - mu_coef2 * eps_theta)
 

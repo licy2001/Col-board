@@ -7,7 +7,6 @@ import numpy as np
 from models.ddpm import DDPM
 from functions.get_Dataset import Restruction
 
-
 def parse_args_and_config():
     parser = argparse.ArgumentParser(
         description="Training Denoising Diffusion Models  For TXCJ"
@@ -28,8 +27,8 @@ def parse_args_and_config():
     parser.add_argument(
         "--timesteps",
         type=int,
-        default=20,
-        help="Number of implicit sampling steps for validation image patches",
+        default=25,
+        help="Number of implicit sampling steps for validation image",
     )
     parser.add_argument(
         "--seed",
@@ -38,19 +37,18 @@ def parse_args_and_config():
         metavar="N",
         help="Seed for initializing training (default: 61)",
     )
-    parser.add_argument(
-        "-i",
-        "--image_folder",
-        type=str,
-        default="/data2/wait/bisheCode/DDPM_Fusion/images",
-        help="The folder name of samples",
-    )
-    parser.add_argument("-gpu", "--gpu_ids", type=str, default="1")
+    parser.add_argument("-gpu", "--gpu_ids", type=str, default="0")
     parser.add_argument(
         "--name",
         type=str,
         default="TXCJ",
         help="folder name to save outputs",
+    )
+    parser.add_argument(
+        "--concat_type",
+        type=str,
+        default="AXB",
+        help="the concat type of condition Image",
     )
     args = parser.parse_args()
 

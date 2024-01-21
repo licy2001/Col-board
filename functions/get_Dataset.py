@@ -43,6 +43,7 @@ class Restruction:
             shuffle=True,
             num_workers=self.config.data.num_workers,
             pin_memory=True,
+            drop_last=True,
         )
         val_loader = torch.utils.data.DataLoader(
             val_dataset,
@@ -50,6 +51,7 @@ class Restruction:
             shuffle=False,
             num_workers=self.config.data.num_workers,
             pin_memory=True,
+            drop_last=True,
         )
 
         return train_loader, val_loader

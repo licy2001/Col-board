@@ -6,7 +6,6 @@ import numpy as np
 from functions.get_Dataset import Fusion
 from models.ddpm import DDPM
 
-
 def parse_args_and_config():
     parser = argparse.ArgumentParser(
         description="Restoring Weather with Patch-Based Denoising Diffusion Models"

@@ -7,8 +7,6 @@ import numpy as np
 from tqdm import tqdm
 import torch
 import torch.nn.functional as F
-from torchvision.utils import make_grid
-from torchvision.utils import save_image as save_img
 import torch.backends.cudnn as cudnn
 from models.unet import UNet
 from models.ema import EMAHelper
@@ -83,14 +81,14 @@ class DDPM(object):
         self.sqrt_alphas = torch.sqrt(self.alphas)
         self.sqrt_alphas_bar = torch.sqrt(self.alphas_bar)
         self.sqrt_one_minus_alphas_bar = torch.sqrt(1.0 - self.alphas_bar)
-        self.log_one_minus_alphas_bar = torch.log(1.0 - self.alphas_bar)
+        # self.log_one_minus_alphas_bar = torch.log(1.0 - self.alphas_bar)
         self.sqrt_recip_alphas_bar = torch.sqrt(1.0 / self.alphas_bar)
-        self.sqrt_recipm1_alphas_bar = torch.sqrt(1.0 / self.alphas_bar - 1)
+        # self.sqrt_recipm1_alphas_bar = torch.sqrt(1.0 / self.alphas_bar - 1)
         # Calculations for posterior q(x_{t-1} | x_t, x_0)
         self.p_variance = (
                 self.betas * (1.0 - self.alphas_bar_prev) / (1.0 - self.alphas_bar)
         )
-        self.p_log_variance_clipped = torch.log(self.p_variance.clamp(min=1e-20))
+        # self.p_log_variance_clipped = torch.log(self.p_variance.clamp(min=1e-20))
 
         # mu_theta_t 的系数
         self.p_mean_coef1 = self.sqrt_alphas_bar * (1 - self.alphas_bar_prev) / (1 - self.alphas_bar)
@@ -175,6 +173,7 @@ class DDPM(object):
         """
         t = self.sample_timestep(x0.shape[0], symmetric=False, big_range=True)
         eps = torch.randn_like(x0).to(self.device)
+        eps = torch.clamp(eps, -1, 1)
         xt = self.sample_forward(x0, t, eps)
         model_input = self.get_model_input(x_cond, xt)
         eps_theta = self.model(model_input, t.float())
@@ -182,12 +181,13 @@ class DDPM(object):
         x0_coef2 = self.extract(self.sqrt_one_minus_alphas_bar, t)
         pred_x0 = x0_coef1 * (xt - x0_coef2 * eps_theta)
         pred_x0 = torch.clamp(pred_x0, -1, 1)
-        loss_fn = torch.nn.MSELoss(size_average=False, reduce=True, reduction="sum")
-        loss = loss_fn(eps_theta, eps)
+        loss_fn = torch.nn.MSELoss(reduction="mean")
+        # loss_fn = torch.nn.MSELoss(size_average=True, reduce=True, reduction="sum")
+        loss = loss_fn(eps_theta, eps) * self.config.training.batch_size
         return loss, xt, eps, eps_theta, pred_x0
 
     def train(self, DATASET):
-        cudnn.benchmark = True
+        # cudnn.benchmark = True
         train_loader, val_loader = DATASET.get_loaders()
         if os.path.isfile(self.args.resume):
             self.load_ddm_ckpt(self.args.resume, ema=True, train=True)
@@ -205,7 +205,6 @@ class DDPM(object):
             epoch_start_time = time.time()
             for i, (x, y) in enumerate(tqdm(train_loader)):
                 self.step += 1
-                current_batch_size = x.shape[0]
                 # n = current_batch_size
                 data_time += time.time() - data_start
                 # 开启梯度更新
@@ -263,8 +262,9 @@ class DDPM(object):
             # per 1 epoch 计算PSNR
             if epoch % 5 == 0:
                 self.model.eval()
+                print(f"start val sample at epoch: {epoch}")
                 with torch.no_grad():
-                    avg_psnr, avg_ssim = self.val_sample(val_loader, self.step)
+                    avg_psnr, avg_ssim = self.val_sample(val_loader, epoch)
                     psnr.append(avg_psnr)
                     ssim.append(avg_ssim)
                     loss_plot(psnr, os.path.join(self.figure_dir, "psnr.png"), y_label="PSNR")
@@ -272,8 +272,8 @@ class DDPM(object):
                     loss_plot(ssim, os.path.join(self.figure_dir, "ssim.png"), y_label="SSIM")
                     loss_table(ssim, os.path.join(self.figure_dir, "ssim.xlsx"), y1_label="Epoch", y2_label="SSIM")
                     self.logger_val.info(
-                        "<epoch:{:3d}, iter:{:8,d}> psnr: {:.4e} ssim: {:.4e}".format(self.start_epoch, self.step,
-                                                                                      avg_psnr, avg_ssim)
+                        "<epoch:{}\titer:{}>\tpsnr: {:.4f}\tssim: {:.4f}".format(epoch, self.step,
+                                                                                 avg_psnr, avg_ssim)
                     )
                     if avg_psnr > best_psnr:
                         best_psnr = avg_psnr
@@ -284,7 +284,7 @@ class DDPM(object):
                                 "loss": epochs_losses,
                                 "psnr": psnr,
                                 "ssim": ssim,
-                                "epoch": self.start_epoch,
+                                "epoch": epoch,
                                 "step": self.step,
                                 "state_dict": self.model.state_dict(),
                                 "optimizer": self.optimizer.state_dict(),
@@ -303,7 +303,7 @@ class DDPM(object):
                         "loss": epochs_losses,
                         "psnr": psnr,
                         "ssim": ssim,
-                        "epoch": self.start_epoch,
+                        "epoch": epoch,
                         "step": self.step,
                         "state_dict": self.model.state_dict(),
                         "optimizer": self.optimizer.state_dict(),
@@ -315,9 +315,8 @@ class DDPM(object):
                 )
             epoch_time = time.time() - epoch_start_time
             self.logger.info(
-                f"currenr epoch: {self.start_epoch}/{self.config.training.n_epochs}\tloss: {average_epoch_loss:.8f}\tper epoch time: {epoch_time}"
+                f"epoch: {self.start_epoch}/{self.config.training.n_epochs}\tloss: {average_epoch_loss:.8f}\tper epoch time: {epoch_time}"
             )
-        self.start_epoch += 1
 
     ###### 第一种采样
     # q(xt|x0)
@@ -339,7 +338,7 @@ class DDPM(object):
             clip_x0=True,
     ):
         n = xt.shape[0]
-        with torch.no_grad():
+        with (torch.no_grad()):
             for i in reversed(range(self.num_timesteps)):
                 t = (torch.ones(n) * i).to(xt.device)
                 xt = self.sample_backward_step(xt, x_cond, t, i, simple_var, clip_x0)
@@ -364,6 +363,7 @@ class DDPM(object):
             else:
                 var = self.extract(self.p_variance, t)
             noise = torch.randn_like(xt)
+            noise = torch.clamp(noise, -1, 1)
             noise *= torch.sqrt(var)
 
         if clip_x0:
@@ -371,7 +371,7 @@ class DDPM(object):
             x0_coef2 = self.extract(self.sqrt_one_minus_alphas_bar, t)
             x_0 = x0_coef1 * (xt - x0_coef2 * eps_theta)
             x_0 = torch.clip(x_0, -1, 1)
-            mean = self.p_mean_coef1[t] * xt + self.p_mean_coef2[t] * x_0
+            mean = self.extract(self.p_mean_coef1, t) * xt + self.extract(self.p_mean_coef2, t) * x_0
         else:
             mu_coef1 = 1 / self.extract(self.sqrt_alphas, t)
             mu_coef2 = (1 - self.extract(self.alphas, t)) / self.extract(self.sqrt_one_minus_alphas_bar, t)
@@ -381,21 +381,18 @@ class DDPM(object):
         return x_t
 
     ###### 第二种采样
-    def generalized_steps(self, xt, x_cond, seq, b, eta=0.8):
+    def generalized_steps(self, xt, x_cond, seq, eta=0.8):
         with torch.no_grad():
-            n = xt.size(0)
+            n = xt.shape[0]
             seq_next = [-1] + list(seq[:-1])
             x0_preds = []
             xs = [xt]
             for i, j in zip(reversed(seq), reversed(seq_next)):
                 t = (torch.ones(n) * i).to(xt.device)
-                # print(t.shape)
                 next_t = (torch.ones(n) * j).to(xt.device)
                 at = self.extract(self.alphas_bar, t)
-                # at = self.compute_alpha(b, t.long())
                 at_next = self.extract(self.alphas_bar, next_t)
-                # at_next = self.compute_alpha(b, next_t.long())
-                xt = xs[-1].to("cuda")
+                xt = xs[-1].to(self.device)
                 model_input = self.get_model_input(x_cond, xt)
                 et = self.model(model_input, t.float())
                 x_0 = (xt - et * torch.sqrt(1 - at)) / torch.sqrt(at)
@@ -404,9 +401,11 @@ class DDPM(object):
 
                 c1 = eta * ((1 - at / at_next) * (1 - at_next) / torch.sqrt(1 - at))
                 c2 = torch.sqrt((1 - at_next) - c1 ** 2)
-                xt_next = torch.sqrt(at_next) * x_0 + c1 * torch.randn_like(x_0) + c2 * et
+                xt_next = torch.sqrt(at_next) * x_0 + c1 * torch.clamp(torch.randn_like(x_0), -1, 1) + c2 * et
+                xt_next = torch.clamp(xt_next, -1, 1)
                 xs.append(xt_next.to("cpu"))
-        return xs, x0_preds
+                xt = xt_next
+        return xt, x0_preds
 
     def ddpm_steps(self, xt, x_cond, seq):
         with torch.no_grad():
@@ -420,7 +419,7 @@ class DDPM(object):
                 at = self.extract(self.alphas_bar, t)
                 atm1 = self.extract(self.alphas_bar, next_t)
                 beta_t = 1 - at / atm1
-                xt = xs[-1].to("cuda")
+                xt = xs[-1].to("cuda:1")
                 model_input = self.get_model_input(x_cond, xt)
                 et = self.model(model_input, t.float())
 
@@ -430,10 +429,12 @@ class DDPM(object):
                 mean_eps = ((torch.sqrt(atm1) * beta_t) * x_0 + (torch.sqrt(1 - beta_t) * (1 - atm1)) * xt) / (1.0 - at)
 
                 noise = torch.randn_like(xt)
+                noise = torch.clamp(noise, -1, 1)
                 mask = 1 - (t == 0).float()
                 mask = mask.view(-1, 1, 1, 1)
                 logvar = torch.log(beta_t)
                 sample = mean_eps + mask * torch.exp(0.5 * logvar) * noise
+                sample = torch.clamp(sample, -1, 1)
                 xs.append(sample.to("cpu"))
         return xs, x0_preds
 
@@ -463,12 +464,13 @@ class DDPM(object):
                 )
                 seq = [int(s) for s in list(seq)]
 
-            xt = self.generalized_steps(xt, x_cond, seq, self.betas, eta=0.01)
+            xt = self.generalized_steps(xt, x_cond, seq, eta=0.8)
         elif sample_type == "ddpm_noisy":
             if skip_type == "uniform":
                 skip = self.num_timesteps // self.args.timesteps
                 seq = range(0, self.num_timesteps, skip)
             elif skip_type == "quad":
+            # else:
                 seq = (
                         np.linspace(
                             0, np.sqrt(self.num_timesteps * 0.8), self.args.timesteps
@@ -476,10 +478,10 @@ class DDPM(object):
                         ** 2
                 )
                 seq = [int(s) for s in list(seq)]
-
-            xt = self.ddpm_steps(xt, seq, self.betas)
+            xt = self.ddpm_steps(xt, x_cond, seq)
 
         if last:
+            # xt = xt[0]
             xt = xt[0][-1]
         return xt
 
@@ -490,82 +492,77 @@ class DDPM(object):
 
         x, _ = next(iter(val_loader))[0]
         x = x.to(self.device)
-
+        x0 = x[0, 6:, :, :]
+        n = x0.shape[0]
         xts = []
         percents = torch.linspace(0, 0.99, 10)
+
         for percent in percents:
-            t = torch.tensor([int(self.num_timesteps * percent)])
-            t = t.unsqueeze(1)
-            x_t = self.sample_forward(x[0, 6:, :, :], t)
-            xts.append(x_t)
+            i = int(self.num_timesteps * percent)
+            t = (torch.ones(n) * i).to(x.device)
+            eps = torch.randn_like(x0)
+            eps = torch.clamp(eps, -1, 1)
+            xt = self.sample_forward(x0, t, eps)
+            xts.append(xt)
         res = torch.stack(xts, 0)
         res = einops.rearrange(res, "n1 n2 c h w -> (n2 h) (n1 w) c")
         res = (res.clip(-1, 1) + 1) / 2 * 255
         res = res.cpu().numpy().astype(np.uint8)
 
         cv2.imwrite(
-            "/data2/wait/bisheCode/DDPM_Fusion/images/diffusion_forward.jpg", res
+            "/data2/wait/bisheCode/DDPM_Fusion/diffusion_forward.jpg", res
         )
 
     # 训练的时候进行验证集采样来看psnr ssim 以及采样结果
     def val_sample(self, val_loader, epoch):
-        self.model.eval()
-        image_floder = image_folder = os.path.join(
-            self.val_sample_dir, "epoch_{:04d}".format(epoch)
-        )
+        # self.model.eval()
+        image_floder = image_folder = os.path.join(self.val_sample_dir, "epoch_{:04d}".format(epoch))
         os.makedirs(image_floder, exist_ok=True)
 
-        with torch.no_grad():
-            self.logger.info(f"Processing val images at epoch: {epoch}")
-            per_img_psnr = 0.0
-            per_img_ssim = 0.0
-            for i, (x, y) in enumerate(tqdm(val_loader)):
-                n = x.shape[0]
-                x_cond = x[:, :6, :, :].to(self.device)
-                x_gt = x[:, 6:, ::].to(self.device)
-                x_cond = data_transform(x_cond)
-                xt = torch.randn(x_gt.shape).to(self.device)
-                xt = torch.clamp(x, -1, 1)
-                # 第一个办法
-                pred_x = self.sample_image(x_cond, xt)
-                # 第二个办法
-                # pred_x = self.sample_backward(
-                #     x_t=x, x_cond=x_cond, simple_var=True, clip_x0=True
-                # )
-                pred_x = inverse_data_transform(pred_x)
-                x_cond = inverse_data_transform(x_cond)
+        # with torch.no_grad():
+        self.logger.info(f"Processing val images at epoch: {epoch}")
+        per_img_psnr = 0.0
+        per_img_ssim = 0.0
+        for i, (x, y) in enumerate(tqdm(val_loader)):
+            n = x.shape[0]
+            x_cond = x[:, :6, :, :].to(self.device)
+            x_gt = x[:, 6:, ::].to(self.device)
+            x_cond = data_transform(x_cond)
+            xt = torch.randn(x_gt.shape).to(self.device)
+            xt = torch.clamp(xt, -1, 1)
+            # 第一个办法
+            # pred_x = self.sample_image(
+            #     x_cond,
+            #     xt,
+            #     last=True,
+            #     sample_type="generalized",
+            #     skip_type="uniform",
+            # )
+            # 第二个办法
+            pred_x = self.sample_backward(xt, x_cond, simple_var=True, clip_x0=True)
+            pred_x = inverse_data_transform(pred_x)
+            x_cond = inverse_data_transform(x_cond)
 
-                for i in range(n):
-                    per_img_psnr += metrics.calculate_psnr(
-                        pred_x[i].permute(1, 2, 0).numpy() * 255.0,
-                        x_gt[i].permute(1, 2, 0).numpy() * 255.0,
-                        test_y_channel=True,
-                    )
-                    per_img_ssim += metrics.calculate_ssim(
-                        pred_x[i].permute(1, 2, 0).numpy() * 255.0,
-                        x_gt[i].permute(1, 2, 0).numpy() * 255.0,
-                    )
+            for i in range(n):
+                per_img_psnr += metrics.calculate_psnr(
+                    pred_x[i].cpu().permute(1, 2, 0).numpy() * 255.0,
+                    x_gt[i].cpu().permute(1, 2, 0).numpy() * 255.0,
+                    test_y_channel=True,
+                )
+                per_img_ssim += metrics.calculate_ssim(
+                    pred_x[i].cpu().permute(1, 2, 0).numpy() * 255.0,
+                    x_gt[i].cpu().permute(1, 2, 0).numpy() * 255.0,
+                )
 
-                    save_image(
-                        x_cond[:, :3, :, :][i],
-                        os.path.join(
-                            image_folder, "{}_degraded1.png".format(y[i][:-4])
-                        ),
-                    )
-                    save_image(
-                        x_cond[:, 3:, :, :][i],
-                        os.path.join(
-                            image_folder, "{}_degraded2.png".format(y[i][:-4])
-                        ),
-                    )
-                    save_image(
-                        pred_x[i],
-                        os.path.join(image_folder, "{}_fake.png".format(y[i][:-4])),
-                    )
-                    save_image(
-                        x_gt[i],
-                        os.path.join(image_folder, "{}_gt.png".format(y[i][:-4])),
-                    )
+                mult_img_dict = {
+                    'cond1': inverse_data_transform(x_cond[i, :3, :, :].detach().float().cpu()),
+                    'cond2': inverse_data_transform(x_cond[i, 3:, :, :].detach().float().cpu()),
+                    'gt': inverse_data_transform(x_gt[i].detach().float().cpu()),
+                    'pred': inverse_data_transform(pred_x[i].detach().float().cpu()),
+                }
+                mult_img_dict_path = os.path.join(os.path.join(image_folder, y[i]))
+                save_image_dict(mult_img_dict, mult_img_dict_path)
+
         avg_psnr = per_img_psnr / len(val_loader.dataset)
         avg_ssim = per_img_ssim / len(val_loader.dataset)
         return avg_psnr, avg_ssim
@@ -580,57 +577,68 @@ class DDPM(object):
         image_folder = self.test_sample_dir
         with torch.no_grad():
             self.logger.info(f"Processing test images at step: {self.start_epoch}")
-        test_loader1 = tqdm(test_loader)
-        for _, (x, y) in enumerate(test_loader1):
-            x = x.flatten(start_dim=0, end_dim=1) if x.ndim == 5 else x
-            n = x.shape[0]
-            x_cond = x[:, :6, :, :].to(self.device)
-            x_cond = data_transform(x_cond)
-            shape = x_cond[:, :3, :, :].shape
-            xt = torch.randn(shape, device=self.device)
-            # 第一个办法
-            pred_x = self.sample_image(
-                x_cond,
-                xt,
-                last=True,
-                sample_type="generalized",
-                skip_type="uniform",
-            )
-            # 第二个办法
-            # pred_x = self.sample_backward(
-            #     x_t=x, x_cond=x_cond, simple_var=True, clip_x0=True
-            # )
-            pred_x = torch.clip(pred_x, -1, 1)
-            pred_x = inverse_data_transform(pred_x)
-            x_cond = inverse_data_transform(x_cond)
+            per_img_psnr = 0.0
+            per_img_ssim = 0.0
+            test_loader1 = tqdm(test_loader)
+            for _, (x, y) in enumerate(test_loader1):
+                n = x.shape[0]
+                x_cond = x[:, :6, :, :].to(self.device)
+                x_cond = data_transform(x_cond)
+                x_gt = x[:, 6:, ::].to(self.device)
+                shape = x_gt.shape
+                xt = torch.randn(shape, device=self.device)
+                xt = torch.clamp(xt, -1, 1)
+                # 第一个办法
+                pred_x = self.sample_image(
+                    x_cond,
+                    xt,
+                    last=True,
+                    sample_type="generalized",
+                    skip_type="uniform",
+                )
+                # 第二个办法
+                # pred_x = self.sample_backward(
+                #     x_t=x, x_cond=x_cond, simple_var=True, clip_x0=True
+                # )
+                pred_x = inverse_data_transform(pred_x)
+                x_cond = inverse_data_transform(x_cond)
 
-            for i in range(n):
-                ml_img = [
-                    x_cond[i, :3, :, :].detach().float().cpu(),
-                    x_cond[i, 3:, :, :].detach().float().cpu(),
-                    pred_x[i].detach().float().cpu(),
-                ]
-                ml_img = make_grid(ml_img, nrow=3, padding=2)
-                os.makedirs(os.path.join(image_folder, type, "grid"), exist_ok=True)
-                save_img(
-                    ml_img,
-                    os.path.join(image_folder, type, "grid", y[i]),
-                    nrow=3,
-                    padding=2,
-                )
-                os.makedirs(os.path.join(image_folder, type, "pred"), exist_ok=True)
-                save_image(pred_x[i], os.path.join(image_folder, type, "pred", y[i]))
-                os.makedirs(os.path.join(image_folder, type, "cond1"), exist_ok=True)
-                save_image(
-                    x_cond[:, :3, :, :][i],
-                    os.path.join(image_folder, type, "cond1", y[i]),
-                )
-                os.makedirs(os.path.join(image_folder, type, "cond2"), exist_ok=True)
-                save_image(
-                    x_cond[:, 3:, :, :][i],
-                    os.path.join(image_folder, type, "cond2", y[i]),
-                )
-                test_loader1.set_description("{} | {}".format(self.args.name, y[i]))
+                for i in range(n):
+                    per_img_psnr += metrics.calculate_psnr(
+                        pred_x[i].cpu().permute(1, 2, 0).numpy() * 255.0,
+                        x_gt[i].cpu().permute(1, 2, 0).numpy() * 255.0,
+                        test_y_channel=True,
+                    )
+                    per_img_ssim += metrics.calculate_ssim(
+                        pred_x[i].cpu().permute(1, 2, 0).numpy() * 255.0,
+                        x_gt[i].cpu().permute(1, 2, 0).numpy() * 255.0,
+                    )
+                    mult_img_dict = {
+                        'cond1': x_cond[i, :3, :, :].detach().float().cpu(),
+                        'cond2': x_cond[i, 3:, :, :].detach().float().cpu(),
+                        'gt': inverse_data_transform(x_gt[i].detach().float().cpu()),
+                        'pred': pred_x[i].detach().float().cpu(),
+                    }
+                    os.makedirs(os.path.join(image_folder, type, "grid"), exist_ok=True)
+                    mult_img_dict_path = os.path.join(os.path.join(image_folder, type, "grid", y[i]))
+                    save_image_dict(mult_img_dict, mult_img_dict_path)
+
+                    os.makedirs(os.path.join(image_folder, type, "pred"), exist_ok=True)
+                    save_image(pred_x[i], os.path.join(image_folder, type, "pred", y[i]))
+                    os.makedirs(os.path.join(image_folder, type, "cond1"), exist_ok=True)
+                    save_image(
+                        x_cond[:, :3, :, :][i],
+                        os.path.join(image_folder, type, "cond1", y[i]),
+                    )
+                    os.makedirs(os.path.join(image_folder, type, "cond2"), exist_ok=True)
+                    save_image(
+                        x_cond[:, 3:, :, :][i],
+                        os.path.join(image_folder, type, "cond2", y[i]),
+                    )
+                    test_loader1.set_description("{} | {}".format(self.args.name, y[i]))
+            avg_psnr = per_img_psnr / len(test_loader.dataset)
+            avg_ssim = per_img_ssim / len(test_loader.dataset)
+        return avg_psnr, avg_ssim
 
     # 采样融合结果
     def Fusion_sample(self, fusion_loader, type):
@@ -640,61 +648,49 @@ class DDPM(object):
         self.load_ddm_ckpt(self.args.resume, ema=False, train=False)
         image_folder = os.path.join(self.fusion_dir, type)
         os.makedirs(image_folder, exist_ok=True)
-
         self.model.eval()
         with torch.no_grad():
             self.logger.info(f"Processing test images at step: {self.start_epoch}")
-        loader = tqdm(fusion_loader)
-        for _, (x, y) in enumerate(loader):
-            x = x.flatten(start_dim=0, end_dim=1) if x.ndim == 5 else x
-            n = x.shape[0]
-            x_cond = x[:, :6, :, :].to(self.device)
-            x_cond = data_transform(x_cond)
-            shape = x_cond[:, :3, :, :].shape
-            xt = torch.randn(shape, device=self.device)
-            # 第一个办法
-            pred_x = self.sample_image(
-                x_cond,
-                xt,
-                last=True,
-                sample_type="generalized",
-                skip_type="uniform",
-            )
-            # 第二个办法
-            # pred_x = self.sample_backward(
-            #     x_t=x, x_cond=x_cond, simple_var=True, clip_x0=True
-            # )
-            pred_x = torch.clip(pred_x, -1, 1)
-            pred_x = inverse_data_transform(pred_x)
-            x_cond = inverse_data_transform(x_cond)
+            loader = tqdm(fusion_loader)
+            for _, (x, y) in enumerate(loader):
+                n = x.shape[0]
+                x_cond = x[:, :6, :, :].to(self.device)
+                x_cond = data_transform(x_cond)
+                shape = x_cond[:, :3, :, :].shape
+                xt = torch.randn(shape, device=self.device)
+                xt = torch.clamp(xt, -1, 1)
+                # 第一个办法
+                pred_x = self.sample_image(
+                    x_cond,
+                    xt,
+                    last=True,
+                    sample_type="generalized",
+                    skip_type="uniform",
+                )
+                # 第二个办法
+                # pred_x = self.sample_backward(
+                #     x_t=x, x_cond=x_cond, simple_var=True, clip_x0=True
+                # )
+                pred_x = torch.clip(pred_x, -1, 1)
+                pred_x = inverse_data_transform(pred_x)
+                x_cond = inverse_data_transform(x_cond)
 
-            for i in range(n):
-                ml_img = [
-                    x_cond[i, :3, :, :].detach().float().cpu(),
-                    x_cond[i, 3:, :, :].detach().float().cpu(),
-                    pred_x[i].detach().float().cpu(),
-                ]
-                ml_img = make_grid(ml_img, nrow=3, padding=2)
-                os.makedirs(os.path.join(image_folder, "grid"), exist_ok=True)
-                save_img(
-                    ml_img,
-                    os.path.join(image_folder, "grid", y[i]),
-                    nrow=3,
-                    padding=2,
-                )
-                os.makedirs(os.path.join(image_folder, "pred"), exist_ok=True)
-                save_image(pred_x[i], os.path.join(image_folder, type, "pred", y[i]))
-                os.makedirs(os.path.join(image_folder, "ir"), exist_ok=True)
-                save_image(
-                    x_cond[:, :3, :, :][i],
-                    os.path.join(image_folder, "ir", y[i]),
-                )
-                os.makedirs(os.path.join(image_folder, "vi"), exist_ok=True)
-                save_image(
-                    x_cond[:, 3:, :, :][i],
-                    os.path.join(image_folder, "vi", y[i]),
-                )
-                loader.set_description("{} | {}".format(self.args.name, y[i]))
+                for i in range(n):
+                    mult_img_dict = {
+                        'ir': x_cond[i, :3, :, :].detach().float().cpu(),
+                        'vi': x_cond[i, 3:, :, :].detach().float().cpu(),
+                        'fusion': pred_x[i].detach().float().cpu(),
+                    }
+                    os.makedirs(os.path.join(image_folder, type, "grid"), exist_ok=True)
+                    mult_img_dict_path = os.path.join(os.path.join(image_folder, type, "grid", y[i]))
+                    save_image_dict(mult_img_dict, mult_img_dict_path)
+                    os.makedirs(os.path.join(image_folder, type, "pred"), exist_ok=True)
+                    save_image(pred_x[i], os.path.join(image_folder, type, "pred", y[i]))
+                    os.makedirs(os.path.join(image_folder, type, "ir"), exist_ok=True)
+                    save_image(x_cond[:, :3, :, :][i], os.path.join(image_folder, "ir", y[i]))
+                    os.makedirs(os.path.join(image_folder, "vi"), exist_ok=True)
+                    save_image(x_cond[:, 3:, :, :][i], os.path.join(image_folder, "vi", y[i]))
+                    loader.set_description("{} | {}".format(self.args.name, y[i]))
 
 
 if __name__ == '__main__':

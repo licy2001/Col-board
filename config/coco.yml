@@ -38,12 +38,12 @@ diffusion:
   num_diffusion_timesteps: 1000
 
 training:
-  batch_size: 4
+  batch_size: 2
   n_epochs: 10000
   epoch_freq: 100
 
 sampling:
-  batch_size: 4
+  batch_size: 1
   last_only: True
 
 optim:

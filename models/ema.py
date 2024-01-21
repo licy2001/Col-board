@@ -14,6 +14,9 @@ class EMAHelper(object):
                 self.shadow[name] = param.data.clone()
 
     def update(self, module):
+        """
+        更新方法，用于在训练过程中更新模型参数的滑动平均版本。
+        """
         if isinstance(module, nn.DataParallel):
             module = module.module
         for name, param in module.named_parameters():
@@ -22,6 +25,9 @@ class EMAHelper(object):
                     1. - self.mu) * param.data + self.mu * self.shadow[name].data
 
     def ema(self, module):
+        """
+        EMA 方法，用于将模型参数设置为其滑动平均版本。
+        """
         if isinstance(module, nn.DataParallel):
             module = module.module
         for name, param in module.named_parameters():
@@ -43,7 +49,13 @@ class EMAHelper(object):
         return module_copy
 
     def state_dict(self):
+        """
+        返回当前滑动平均版本的状态字典。
+        """
         return self.shadow
 
     def load_state_dict(self, state_dict):
+        """
+        从给定的状态字典加载滑动平均版本
+        """
         self.shadow = state_dict

@@ -59,9 +59,9 @@ class DDPM(object):
         self.model.to(self.device)
         gpus = [1]
         self.model = torch.nn.DataParallel(self.model)
-        self.ema_helper = EMAHelper(mu=self.config.model.ema_rate)
-        self.ema_helper.register(self.model)
-
+        if self.config.model.ema:
+            self.ema_helper = EMAHelper(mu=self.config.model.ema_rate)
+            self.ema_helper.register(self.model)
         self.optimizer = get_optimizer(self.config, self.model.parameters())
         self.start_epoch, self.step = 0, 0
         self.epochs_loss, self.psnr, self.ssim = [], [], []
@@ -80,6 +80,7 @@ class DDPM(object):
         self.alphas_bar = torch.cumprod(self.alphas, dim=0)
         self.alphas_bar_prev = F.pad(self.alphas_bar[:-1], (1, 0), value=1.0)
         # Calculations for diffusion q(x_t | x_{t-1}) and others
+        self.sqrt_alphas = torch.sqrt(self.alphas)
         self.sqrt_alphas_bar = torch.sqrt(self.alphas_bar)
         self.sqrt_one_minus_alphas_bar = torch.sqrt(1.0 - self.alphas_bar)
         self.log_one_minus_alphas_bar = torch.log(1.0 - self.alphas_bar)
@@ -118,10 +119,9 @@ class DDPM(object):
         self.model.load_state_dict(checkpoint["state_dict"], strict=True)
         if train:
             self.optimizer.load_state_dict(checkpoint["optimizer"])
-            self.ema_helper.load_state_dict(checkpoint["ema_helper"])
         if ema:
             self.ema_helper.ema(self.model)
-            self.ema_helper.register(self.model)
+            self.ema_helper.load_state_dict(checkpoint["ema_helper"])
         self.logger.info(
             "=> loaded checkpoint '{}' (epoch {}, step {})".format(
                 load_path, self.start_epoch, self.step
@@ -159,6 +159,16 @@ class DDPM(object):
             t = torch.randint(low=0, high=self.num_timesteps, size=(n,)).to(self.device)  # 生成n个随机时间步骤
         return t
 
+    def get_model_input(self, x_cond, xt):
+
+        if self.args.concat_type == "ABX":
+            model_input = torch.cat([x_cond, xt], dim=1)
+        elif self.args.concat_type == "AXB":
+            model_input = torch.cat([x_cond[:, :3, :, :], xt, x_cond[:, 3:, :, :]], dim=1)
+        else:
+            model_input = torch.cat([xt, x_cond], dim=1)
+        return model_input
+
     def get_loss(self, x0, x_cond):
         """
         计算MSE损失
@@ -166,14 +176,8 @@ class DDPM(object):
         t = self.sample_timestep(x0.shape[0], symmetric=False, big_range=True)
         eps = torch.randn_like(x0).to(self.device)
         xt = self.sample_forward(x0, t, eps)
-        if self.args.concat_type == "ABX":
-            model_input = torch.cat([x_cond, xt], dim=1)
-        elif self.args.concat_type == "AXB":
-            model_input = torch.cat([x_cond[:, :3, :, :], xt, x_cond[:, 3:, :, :]], dim=1)
-        else:
-            model_input = torch.cat([xt, x_cond], dim=1)
-
-        eps_theta = self.model(model_input, t)
+        model_input = self.get_model_input(x_cond, xt)
+        eps_theta = self.model(model_input, t.float())
         x0_coef1 = self.extract(self.sqrt_recip_alphas_bar, t)
         x0_coef2 = self.extract(self.sqrt_one_minus_alphas_bar, t)
         pred_x0 = x0_coef1 * (xt - x0_coef2 * eps_theta)
@@ -201,11 +205,8 @@ class DDPM(object):
             epoch_start_time = time.time()
             for i, (x, y) in enumerate(tqdm(train_loader)):
                 self.step += 1
-                # print("input shape:", x.shape)
-                # x = x.flatten(start_dim=0, end_dim=1) if x.ndim == 5 else x
-                # print("flatten input shape:", x.shape)
                 current_batch_size = x.shape[0]
-                n = current_batch_size
+                # n = current_batch_size
                 data_time += time.time() - data_start
                 # 开启梯度更新
                 self.model.train()
@@ -225,7 +226,14 @@ class DDPM(object):
                 # 模型参数更新
                 self.optimizer.zero_grad()
                 loss.backward()
+                try:
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), self.config.optim.grad_clip
+                    )
+                except Exception:
+                    pass
                 self.optimizer.step()
+
                 if self.config.model.ema:
                     self.ema_helper.update(self.model)
 
@@ -325,61 +333,52 @@ class DDPM(object):
     # q(x0|xt)
     def sample_backward(
             self,
-            x_t,
+            xt,
             x_cond,
             simple_var=True,
             clip_x0=True,
     ):
+        n = xt.shape[0]
         with torch.no_grad():
-            for t in reversed(range(self.num_timesteps)):
-                t = torch.tensor([t] * x_t.shape[0], dtype=torch.long).to(x_t.device).unsqueeze(1)
-                x_t = self.sample_backward_step(x_t, x_cond, t, simple_var, clip_x0)
-        return x_t
+            for i in reversed(range(self.num_timesteps)):
+                t = (torch.ones(n) * i).to(xt.device)
+                xt = self.sample_backward_step(xt, x_cond, t, i, simple_var, clip_x0)
+        return xt
 
     def sample_backward_step(
             self,
-            x_t,
+            xt,
             x_cond,
             t,
+            i,
             simple_var=True,
             clip_x0=True,
     ):
-        # t_tensor = (torch.ones(n) * t).to(x_t.device)
-        t_tensor = torch.tensor([t] * x_t.shape[0], dtype=torch.long).to(x_t.device).unsqueeze(1)
-        input = torch.cat([x_cond, x_t], dim=1)
-        eps = self.model(input, t_tensor)
-        if t == 0:
+        model_input = self.get_model_input(x_cond, xt)
+        eps_theta = self.model(model_input, t)
+        if i == 0:
             noise = 0
         else:
             if simple_var:
-                var = self.betas[t]
+                var = self.extract(self.betas, t)
             else:
-                var = (
-                        (1 - self.alpha_bar[t - 1])
-                        / (1 - self.alpha_bar[t])
-                        * self.betas[t]
-                )
-            noise = torch.randn_like(x_t)
+                var = self.extract(self.p_variance, t)
+            noise = torch.randn_like(xt)
             noise *= torch.sqrt(var)
 
         if clip_x0:
-            x_0 = (x_t - torch.sqrt(1 - self.alpha_bar[t]) * eps) / torch.sqrt(
-                self.alpha_bar[t]
-            )
+            x0_coef1 = self.extract(self.sqrt_recip_alphas_bar, t)
+            x0_coef2 = self.extract(self.sqrt_one_minus_alphas_bar, t)
+            x_0 = x0_coef1 * (xt - x0_coef2 * eps_theta)
             x_0 = torch.clip(x_0, -1, 1)
-            mean = self.coef1[t] * x_t + self.coef2[t] * x_0
+            mean = self.p_mean_coef1[t] * xt + self.p_mean_coef2[t] * x_0
         else:
-            mean = (
-                           x_t - (1 - self.alphas[t]) / torch.sqrt(1 - self.alpha_bar[t]) * eps
-                   ) / torch.sqrt(self.alphas[t])
+            mu_coef1 = 1 / self.extract(self.sqrt_alphas)
+            mu_coef2 = (1 - self.extract(self.alphas, t)) / self.extract(self.sqrt_one_minus_alphas_bar, t)
+            mean = mu_coef1 * (xt - mu_coef2 * eps_theta)
+
         x_t = mean + noise
-
         return x_t
-
-    def compute_alpha(self, beta, t):
-        beta = torch.cat([torch.zeros(1).to(beta.device), beta], dim=0)
-        a = (1 - beta).cumprod(dim=0).index_select(0, t + 1).view(-1, 1, 1, 1)
-        return a
 
     ###### 第二种采样
     def generalized_steps(self, xt, x_cond, seq, b, eta=0.8):
@@ -392,54 +391,49 @@ class DDPM(object):
                 t = (torch.ones(n) * i).to(xt.device)
                 # print(t.shape)
                 next_t = (torch.ones(n) * j).to(xt.device)
-                at = self.compute_alpha(b, t.long())
-                at_next = self.compute_alpha(b, next_t.long())
+                at = self.extract(self.alphas_bar, t)
+                # at = self.compute_alpha(b, t.long())
+                at_next = self.extract(self.alphas_bar, next_t)
+                # at_next = self.compute_alpha(b, next_t.long())
                 xt = xs[-1].to("cuda")
-
-                et = self.model(torch.cat([x_cond, xt], dim=1), t.float())
-                x_0 = (xt - et * (1 - at).sqrt()) / at.sqrt()
-
-                x_0 = torch.clip(x_0, -1, 1)
-
+                model_input = self.get_model_input(x_cond, xt)
+                et = self.model(model_input, t.float())
+                x_0 = (xt - et * torch.sqrt(1 - at)) / torch.sqrt(at)
+                x_0 = torch.clamp(x_0, -1, 1)
                 x0_preds.append(x_0.to("cpu"))
-                c1 = eta * ((1 - at / at_next) * (1 - at_next) / (1 - at)).sqrt()
-                c2 = ((1 - at_next) - c1 ** 2).sqrt()
-                xt_next = at_next.sqrt() * x_0 + c1 * torch.randn_like(x_0) + c2 * et
+
+                c1 = eta * ((1 - at / at_next) * (1 - at_next) / torch.sqrt(1 - at))
+                c2 = torch.sqrt((1 - at_next) - c1 ** 2)
+                xt_next = torch.sqrt(at_next) * x_0 + c1 * torch.randn_like(x_0) + c2 * et
                 xs.append(xt_next.to("cpu"))
         return xs, x0_preds
 
-    def ddpm_steps(self, x, x_cond, seq, model, b, **kwargs):
+    def ddpm_steps(self, xt, x_cond, seq):
         with torch.no_grad():
-            n = x.size(0)
+            n = xt.size(0)
             seq_next = [-1] + list(seq[:-1])
-            xs = [x]
+            xs = [xt]
             x0_preds = []
-            betas = b
             for i, j in zip(reversed(seq), reversed(seq_next)):
-                t = (torch.ones(n) * i).to(x.device)
-                next_t = (torch.ones(n) * j).to(x.device)
-                at = self.compute_alpha(betas, t.long())
-                atm1 = self.compute_alpha(betas, next_t.long())
+                t = (torch.ones(n) * i).to(xt.device)
+                next_t = (torch.ones(n) * j).to(xt.device)
+                at = self.extract(self.alphas_bar, t)
+                atm1 = self.extract(self.alphas_bar, next_t)
                 beta_t = 1 - at / atm1
-                x = xs[-1].to("cuda")
+                xt = xs[-1].to("cuda")
+                model_input = self.get_model_input(x_cond, xt)
+                et = self.model(model_input, t.float())
 
-                output = model(torch.cat([x_cond, x], dim=1), t.float())
-                e = output
+                x_0 = (xt - et * torch.sqrt(1 - at)) / torch.sqrt(at)
+                x_0 = torch.clamp(x_0, -1, 1)
+                x0_preds.append(x_0.to("cpu"))
+                mean_eps = ((torch.sqrt(atm1) * beta_t) * x_0 + (torch.sqrt(1 - beta_t) * (1 - atm1)) * xt) / (1.0 - at)
 
-                x0_from_e = (1.0 / at).sqrt() * x - (1.0 / at - 1).sqrt() * e
-                x0_from_e = torch.clamp(x0_from_e, -1, 1)
-                x0_preds.append(x0_from_e.to("cpu"))
-                mean_eps = (
-                                   (atm1.sqrt() * beta_t) * x0_from_e
-                                   + ((1 - beta_t).sqrt() * (1 - atm1)) * x
-                           ) / (1.0 - at)
-
-                mean = mean_eps
-                noise = torch.randn_like(x)
+                noise = torch.randn_like(xt)
                 mask = 1 - (t == 0).float()
                 mask = mask.view(-1, 1, 1, 1)
-                logvar = beta_t.log()
-                sample = mean + mask * torch.exp(0.5 * logvar) * noise
+                logvar = torch.log(beta_t)
+                sample = mean_eps + mask * torch.exp(0.5 * logvar) * noise
                 xs.append(sample.to("cpu"))
         return xs, x0_preds
 
@@ -526,24 +520,18 @@ class DDPM(object):
             per_img_psnr = 0.0
             per_img_ssim = 0.0
             for i, (x, y) in enumerate(tqdm(val_loader)):
-                # print(f"flat 前 x.shape: {x.shape}")
-                x = x.flatten(start_dim=0, end_dim=1) if x.ndim == 5 else x
-                # print(f"flat 后 x.shape: {x.shape}")
-
                 n = x.shape[0]
                 x_cond = x[:, :6, :, :].to(self.device)
-                x_gt = x[:, 6:, ::]
+                x_gt = x[:, 6:, ::].to(self.device)
                 x_cond = data_transform(x_cond)
-                shape = x_gt.shape
-                x = torch.randn(shape).to(self.device)
+                xt = torch.randn(x_gt.shape).to(self.device)
+                xt = torch.clamp(x, -1, 1)
                 # 第一个办法
-                pred_x = self.sample_image(x_cond, x)
+                pred_x = self.sample_image(x_cond, xt)
                 # 第二个办法
                 # pred_x = self.sample_backward(
                 #     x_t=x, x_cond=x_cond, simple_var=True, clip_x0=True
                 # )
-                pred_x = torch.clip(pred_x, -1, 1)
-
                 pred_x = inverse_data_transform(pred_x)
                 x_cond = inverse_data_transform(x_cond)
 

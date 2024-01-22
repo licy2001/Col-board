@@ -14,7 +14,7 @@ def parse_args_and_config():
     parser.add_argument(
         "--config",
         type=str,
-        default="/data2/wait/bisheCode/DDPM_Fusion/config/coco.yml",
+        default="/data2/wait/bisheCode/DDPM_Fusion/config/coco128.yml",
         help="Path to the config file",
     )
     parser.add_argument("--phase", type=str, default="train", help="val(generation)")
@@ -27,7 +27,7 @@ def parse_args_and_config():
     parser.add_argument(
         "--timesteps",
         type=int,
-        default=20,
+        default=25,
         help="Number of implicit sampling steps for validation image",
     )
     parser.add_argument(

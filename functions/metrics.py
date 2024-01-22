@@ -59,8 +59,8 @@ def calculate_psnr_y_channel(img1, img2):
 
 def calculate_ssim(img1, img2):
     # 确保图像张量在同一设备上，并且有相同的数据类型
-    img1 = img1.to(torch.float32).cpu()
-    img2 = img2.to(torch.float32).cpu()
+    img1 = img1.unsqueeze(0).to(torch.float32).cpu()
+    img2 = img2.unsqueeze(0).to(torch.float32).cpu()
 
     # 计算 SSIM
     ssim_value = ssim(img1, img2, data_range=1.0, size_average=True)  # data_range取决于图像的范围，如果是[0,1]则为1.0，如果是[0,255]则为255.0

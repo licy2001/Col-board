@@ -75,9 +75,10 @@ class DDPM(object):
         )
 
         # 参数
-        self.betas = betas.to(self.device)
+        betas = betas.to(torch.float32).to(self.device)
+        self.betas = betas
         self.num_timesteps = betas.shape[0]
-        self.alphas = 1.0 - betas
+        self.alphas = (1.0 - self.betas)
         self.alphas_bar = torch.cumprod(self.alphas, dim=0)
         self.alphas_bar_prev = F.pad(self.alphas_bar[:-1], (1, 0), value=1.0)
         # Calculations for diffusion q(x_t | x_{t-1}) and others
@@ -387,6 +388,7 @@ class DDPM(object):
         return x_t
 
     ###### 第二种采样
+    @torch.no_grad()
     def get_sample_step(self):
         """
         Calculate time step size, it skips some steps
@@ -399,9 +401,8 @@ class DDPM(object):
 
     @torch.no_grad()
     def ddim_sample(self, xt, x_cond, eta=0):
-        self.logger_val.info(msg=f"DDIM Sampling {xt.shape[0]} images....")
+        self.logger_val.info(msg=f"DDIM Sampling images....")
         # self.model.eval()
-        xt = xt.to(self.device)
         n = xt.shape[0]
         # x0_preds = []
         # xs = [xt]
@@ -414,15 +415,15 @@ class DDPM(object):
             # Previous time step, creating a tensor of size n
             p_t = (torch.ones(n) * p_i).long().to(self.device)
             # Expand to a 4-dimensional tensor, and get the value according to the time step t
-            alpha_t = self.alphas_bar[t][:, None, None, None]
-            alpha_prev = self.alphas_bar[p_t][:, None, None, None]
+            alpha_t = self.alphas_bar[t][:, None, None, None].to(self.device)
+            alpha_prev = self.alphas_bar[p_t][:, None, None, None].to(self.device)
             if i > 1:
-                noise = torch.randn_like(xt)
+                noise = torch.randn_like(xt, dtype=torch.float32)
             else:
-                noise = torch.zeros_like(xt)
+                noise = torch.zeros_like(xt, dtype=torch.float32)
             noise = torch.clamp(noise, -1, 1) # 加的
             model_input = self.get_model_input(xt, x_cond)
-            eps_theta = self.model(model_input, t)
+            eps_theta = self.model(model_input, t.float())
             eps_theta = torch.clamp(eps_theta, -1, 1) # 加的
             # Calculation formula
             # xt = xs[-1].to(self.device)
@@ -557,11 +558,12 @@ class DDPM(object):
         for i, (x, y) in enumerate(tqdm(val_loader)):
             n = x.shape[0]
             x = data_transform(x)
-            x_cond = x[:, :6, :, :].to(self.device)
-            x_gt = x[:, 6:, ::].to(self.device)
+            x = x.to(self.device)
+            x_cond = x[:, :6, :, :]
+            x_gt = x[:, 6:, ::]
             # x_cond = data_transform(x_cond)
-            xt = torch.randn(x_gt.shape).to(self.device)
-            pred_x = self.ddim_sample(xt, x_cond)
+            xt = torch.randn(x_gt.shape, dtype=torch.float32).to(self.device)
+            pred_x = self.ddim_sample(xt, x_cond, eta=0)
             # 第一个办法
             # pred_x = self.sample_image(
             #     x_cond,

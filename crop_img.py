@@ -2,8 +2,9 @@ from PIL import Image
 import os
 
 # 指定输入和输出文件夹路径
-input_folder = '/data2/wait/bisheCode/DDPM_Fusion/example'
-output_folder = '/data2/wait/bisheCode/DDPM_Fusion'
+input_folder = '/data2/wait/bisheCode/DDPM_Fusion/dataset/TXCJ/val/ImageS'
+output_folder = '/data2/wait/bisheCode/DDPM_Fusion/dataset/TXCJ128/val/ImageS'
+crop_size = 128
 
 # 确保输出文件夹存在
 os.makedirs(output_folder, exist_ok=True)
@@ -22,10 +23,10 @@ for filename in os.listdir(input_folder):
         # right = (width + 640) / 2
         # bottom = (height + 420) / 2
         # 计算裁剪区域
-        left = (width - 256) / 2
-        top = (height - 256) / 2
-        right = (width + 256) / 2
-        bottom = (height + 256) / 2
+        left = (width - crop_size) / 2
+        top = (height - crop_size) / 2
+        right = (width + crop_size) / 2
+        bottom = (height + crop_size) / 2
         cropped_img = img.crop((left, top, right, bottom))
 
 

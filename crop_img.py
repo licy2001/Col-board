@@ -2,8 +2,8 @@ from PIL import Image
 import os
 
 # 指定输入和输出文件夹路径
-input_folder = '/data2/wait/bisheCode/DDPM_Fusion/dataset/TXCJ/test1/ImageS'
-output_folder = '/data2/wait/bisheCode/DDPM_Fusion/dataset/TXCJ/test/ImageS'
+input_folder = '/data2/wait/bisheCode/DDPM_Fusion/example'
+output_folder = '/data2/wait/bisheCode/DDPM_Fusion'
 
 # 确保输出文件夹存在
 os.makedirs(output_folder, exist_ok=True)

@@ -14,8 +14,8 @@ def save_image_dict(image_dict, output_path, type='png'):
     fig, axes = plt.subplots(1, len(image_dict), figsize=(20, 4))
     for i, (img_name, img_tensor) in enumerate(image_dict.items()):
         # 如果图像在GPU上，先移动到CPU
-        img = img_tensor
-        # img = img_tensor.cpu()
+        # img = img_tensor
+        img = img_tensor.to(torch.float32).cpu()
         # 如果图像张量有批次维度，去掉批次维度
         if img.ndim == 4 and img.shape[0] == 1:
             img = img.squeeze(0)
@@ -31,7 +31,9 @@ def save_image_dict(image_dict, output_path, type='png'):
         axes[i].imshow(img, cmap=cmap)
         axes[i].axis('off')
         axes[i].set_title(img_name) # 设置标题
-    plt.savefig(output_path, format=type)
+    plt.savefig(output_path, format=type, facecolor='white', edgecolor='white', transparent=False)
+    plt.clf()
+    plt.close("all")
     # plt.show()
 
 # display_and_save_images(mult_img_list, 'mult_img_display.png', format='png')
@@ -67,7 +69,7 @@ def loss_plot(data_list, path, x_label="Epoch", y_label="Loss"):
     plt.title(f"{y_label} of {x_label}")
     plt.legend(loc="upper right")
     save_loss_path = path
-    plt.savefig(save_loss_path)
+    plt.savefig(save_loss_path, facecolor='white', edgecolor='white', transparent=False)
     plt.clf()
     plt.close("all")
 

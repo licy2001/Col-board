@@ -27,7 +27,7 @@ def parse_args_and_config():
     parser.add_argument(
         "--timesteps",
         type=int,
-        default=25,
+        default=20,
         help="Number of implicit sampling steps for validation image",
     )
     parser.add_argument(
@@ -37,7 +37,7 @@ def parse_args_and_config():
         metavar="N",
         help="Seed for initializing training (default: 61)",
     )
-    parser.add_argument("-gpu", "--gpu_ids", type=str, default="0")
+    parser.add_argument("-gpu", "--gpu_ids", type=str, default="2")
     parser.add_argument(
         "--name",
         type=str,

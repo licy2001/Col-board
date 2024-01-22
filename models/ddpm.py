@@ -7,7 +7,7 @@ import numpy as np
 from tqdm import tqdm
 import torch
 import torch.nn.functional as F
-import torch.backends.cudnn as cudnn
+from torchvision.transforms import ToPILImage
 from models.unet import UNet
 from models.ema import EMAHelper
 from functions.netAndSave import (
@@ -23,7 +23,7 @@ from functions.netAndSave import (
 from functions.get_Optimizer import get_optimizer
 from functions.losses import noise_estimation_loss
 from functions.data_Process import data_transform, inverse_data_transform
-from functions import metrics
+from functions.metrics import calculate_psnr, calculate_ssim
 
 
 def get_beta_schedule(beta_schedule, *, beta_start, beta_end, num_diffusion_timesteps):
@@ -158,7 +158,7 @@ class DDPM(object):
         return t
 
     def get_model_input(self, x_cond, xt):
-
+        # print(self.args.concat_type)
         if self.args.concat_type == "ABX":
             model_input = torch.cat([x_cond, xt], dim=1)
         elif self.args.concat_type == "AXB":
@@ -240,13 +240,13 @@ class DDPM(object):
                 epoch_loss += loss.item()
                 if self.step % 100 == 0 or self.step == 1:
                     mult_img_dict = {
-                        'cond1': inverse_data_transform(x[0, :3, :, :].detach().float().cpu()),
-                        'cond2': inverse_data_transform(x[0, 3:6, :, :].detach().float().cpu()),
-                        'xt': inverse_data_transform(x_t[0, ::].detach().float().cpu()),
-                        'noise': inverse_data_transform(eps[0, ::].detach().float().cpu()),
-                        'pred_noise': inverse_data_transform(pred_noise[0, ::].detach().float().cpu()),
-                        'pred_x0': inverse_data_transform(pred_x0[0, ::].detach().float().cpu()),
-                        'x0': inverse_data_transform(x[0, 6:, ::].detach().float().cpu())
+                        'cond1': inverse_data_transform(x[0, :3, :, :].detach()),
+                        'cond2': inverse_data_transform(x[0, 3:6, :, :].detach()),
+                        'xt': inverse_data_transform(x_t[0, ::].detach()),
+                        'noise': inverse_data_transform(eps[0, ::].detach()),
+                        'pred_noise': inverse_data_transform(pred_noise[0, ::].detach()),
+                        'pred_x0': inverse_data_transform(pred_x0[0, ::].detach()),
+                        'x0': inverse_data_transform(x[0, 6:, ::].detach())
                     }
                     os.makedirs(self.generate_process_dir, exist_ok=True)
                     mult_img_dict_path = os.path.join(self.generate_process_dir, f"grid_mult_img{self.step}.png")
@@ -381,31 +381,38 @@ class DDPM(object):
         return x_t
 
     ###### 第二种采样
-    def generalized_steps(self, xt, x_cond, seq, eta=0.8):
+
+    def compute_alpha(self, beta, t):
+        beta = torch.cat([torch.zeros(1).to(beta.device), beta], dim=0)
+        a = (1 - beta).cumprod(dim=0).index_select(0, t + 1).view(-1, 1, 1, 1)
+        return a
+
+    def generalized_steps(self, x, x_cond, seq, eta=0.8):
         with torch.no_grad():
-            n = xt.shape[0]
+            n = x.size(0)
             seq_next = [-1] + list(seq[:-1])
             x0_preds = []
-            xs = [xt]
+            xs = [x]
             for i, j in zip(reversed(seq), reversed(seq_next)):
-                t = (torch.ones(n) * i).to(xt.device)
-                next_t = (torch.ones(n) * j).to(xt.device)
-                at = self.extract(self.alphas_bar, t)
-                at_next = self.extract(self.alphas_bar, next_t)
-                xt = xs[-1].to(self.device)
-                model_input = self.get_model_input(x_cond, xt)
-                et = self.model(model_input, t.float())
-                x_0 = (xt - et * torch.sqrt(1 - at)) / torch.sqrt(at)
-                x_0 = torch.clamp(x_0, -1, 1)
-                x0_preds.append(x_0.to("cpu"))
+                t = (torch.ones(n) * i).to(x.device)
+                next_t = (torch.ones(n) * j).to(x.device)
+                b = self.betas
+                b = b.to(self.device)
+                at = self.compute_alpha(b, t.long())
+                at_next = self.compute_alpha(b, next_t.long())
+                xt = xs[-1].to('cuda')
+                model_input = self.get_model_input(x_cond, x)
+                et = self.model(model_input, t)
+                x0_t = (xt - et * (1 - at).sqrt()) / at.sqrt()
+                x0_preds.append(x0_t.to('cpu'))
+                c1 = (
+                        eta * ((1 - at / at_next) * (1 - at_next) / (1 - at)).sqrt()
+                )
+                c2 = ((1 - at_next) - c1 ** 2).sqrt()
+                xt_next = at_next.sqrt() * x0_t + c1 * torch.randn_like(x) + c2 * et
+                xs.append(xt_next.to('cpu'))
 
-                c1 = eta * ((1 - at / at_next) * (1 - at_next) / torch.sqrt(1 - at))
-                c2 = torch.sqrt((1 - at_next) - c1 ** 2)
-                xt_next = torch.sqrt(at_next) * x_0 + c1 * torch.clamp(torch.randn_like(x_0), -1, 1) + c2 * et
-                xt_next = torch.clamp(xt_next, -1, 1)
-                xs.append(xt_next.to("cpu"))
-                xt = xt_next
-        return xt, x0_preds
+        return xs, x0_preds
 
     def ddpm_steps(self, xt, x_cond, seq):
         with torch.no_grad():
@@ -470,7 +477,7 @@ class DDPM(object):
                 skip = self.num_timesteps // self.args.timesteps
                 seq = range(0, self.num_timesteps, skip)
             elif skip_type == "quad":
-            # else:
+                # else:
                 seq = (
                         np.linspace(
                             0, np.sqrt(self.num_timesteps * 0.8), self.args.timesteps
@@ -525,40 +532,32 @@ class DDPM(object):
         per_img_ssim = 0.0
         for i, (x, y) in enumerate(tqdm(val_loader)):
             n = x.shape[0]
+            x = data_transform(x)
             x_cond = x[:, :6, :, :].to(self.device)
             x_gt = x[:, 6:, ::].to(self.device)
-            x_cond = data_transform(x_cond)
+            # x_cond = data_transform(x_cond)
             xt = torch.randn(x_gt.shape).to(self.device)
-            xt = torch.clamp(xt, -1, 1)
             # 第一个办法
-            # pred_x = self.sample_image(
-            #     x_cond,
-            #     xt,
-            #     last=True,
-            #     sample_type="generalized",
-            #     skip_type="uniform",
-            # )
+            pred_x = self.sample_image(
+                x_cond,
+                xt,
+                last=True,
+                sample_type="generalized",
+                skip_type="uniform",
+            )
             # 第二个办法
-            pred_x = self.sample_backward(xt, x_cond, simple_var=True, clip_x0=True)
+            # pred_x = self.sample_backward(xt, x_cond, simple_var=True, clip_x0=True)
             pred_x = inverse_data_transform(pred_x)
             x_cond = inverse_data_transform(x_cond)
-
+            x_gt = inverse_data_transform(x_gt)
             for i in range(n):
-                per_img_psnr += metrics.calculate_psnr(
-                    pred_x[i].cpu().permute(1, 2, 0).numpy() * 255.0,
-                    x_gt[i].cpu().permute(1, 2, 0).numpy() * 255.0,
-                    test_y_channel=True,
-                )
-                per_img_ssim += metrics.calculate_ssim(
-                    pred_x[i].cpu().permute(1, 2, 0).numpy() * 255.0,
-                    x_gt[i].cpu().permute(1, 2, 0).numpy() * 255.0,
-                )
-
+                per_img_psnr += calculate_psnr(pred_x[i], x_gt[i], test_y_channel=True)
+                per_img_ssim += calculate_ssim(pred_x[i], x_gt[i])
                 mult_img_dict = {
-                    'cond1': inverse_data_transform(x_cond[i, :3, :, :].detach().float().cpu()),
-                    'cond2': inverse_data_transform(x_cond[i, 3:, :, :].detach().float().cpu()),
-                    'gt': inverse_data_transform(x_gt[i].detach().float().cpu()),
-                    'pred': inverse_data_transform(pred_x[i].detach().float().cpu()),
+                    'cond1': x_cond[i, :3, :, :].detach(),
+                    'cond2': x_cond[i, 3:, :, :].detach(),
+                    'gt': x_gt[i].detach(),
+                    'pred': pred_x[i].detach(),
                 }
                 mult_img_dict_path = os.path.join(os.path.join(image_folder, y[i]))
                 save_image_dict(mult_img_dict, mult_img_dict_path)
@@ -582,8 +581,8 @@ class DDPM(object):
             test_loader1 = tqdm(test_loader)
             for _, (x, y) in enumerate(test_loader1):
                 n = x.shape[0]
+                x = data_transform(x)
                 x_cond = x[:, :6, :, :].to(self.device)
-                x_cond = data_transform(x_cond)
                 x_gt = x[:, 6:, ::].to(self.device)
                 shape = x_gt.shape
                 xt = torch.randn(shape, device=self.device)
@@ -602,22 +601,15 @@ class DDPM(object):
                 # )
                 pred_x = inverse_data_transform(pred_x)
                 x_cond = inverse_data_transform(x_cond)
-
+                x_gt = inverse_data_transform(x_gt)
                 for i in range(n):
-                    per_img_psnr += metrics.calculate_psnr(
-                        pred_x[i].cpu().permute(1, 2, 0).numpy() * 255.0,
-                        x_gt[i].cpu().permute(1, 2, 0).numpy() * 255.0,
-                        test_y_channel=True,
-                    )
-                    per_img_ssim += metrics.calculate_ssim(
-                        pred_x[i].cpu().permute(1, 2, 0).numpy() * 255.0,
-                        x_gt[i].cpu().permute(1, 2, 0).numpy() * 255.0,
-                    )
+                    per_img_psnr += calculate_psnr(pred_x[i], x_gt[i], test_y_channel=True)
+                    per_img_ssim += calculate_ssim(pred_x[i], x_gt[i])
                     mult_img_dict = {
-                        'cond1': x_cond[i, :3, :, :].detach().float().cpu(),
-                        'cond2': x_cond[i, 3:, :, :].detach().float().cpu(),
-                        'gt': inverse_data_transform(x_gt[i].detach().float().cpu()),
-                        'pred': pred_x[i].detach().float().cpu(),
+                        'cond1': x_cond[i, :3, :, :].detach(),
+                        'cond2': x_cond[i, 3:, :, :].detach(),
+                        'gt': x_gt[i].detach(),
+                        'pred': pred_x[i].detach(),
                     }
                     os.makedirs(os.path.join(image_folder, type, "grid"), exist_ok=True)
                     mult_img_dict_path = os.path.join(os.path.join(image_folder, type, "grid", y[i]))
@@ -654,8 +646,8 @@ class DDPM(object):
             loader = tqdm(fusion_loader)
             for _, (x, y) in enumerate(loader):
                 n = x.shape[0]
-                x_cond = x[:, :6, :, :].to(self.device)
-                x_cond = data_transform(x_cond)
+                x = data_transform(x)
+                x_cond = x.to(self.device)
                 shape = x_cond[:, :3, :, :].shape
                 xt = torch.randn(shape, device=self.device)
                 xt = torch.clamp(xt, -1, 1)
@@ -671,15 +663,14 @@ class DDPM(object):
                 # pred_x = self.sample_backward(
                 #     x_t=x, x_cond=x_cond, simple_var=True, clip_x0=True
                 # )
-                pred_x = torch.clip(pred_x, -1, 1)
                 pred_x = inverse_data_transform(pred_x)
                 x_cond = inverse_data_transform(x_cond)
 
                 for i in range(n):
                     mult_img_dict = {
-                        'ir': x_cond[i, :3, :, :].detach().float().cpu(),
-                        'vi': x_cond[i, 3:, :, :].detach().float().cpu(),
-                        'fusion': pred_x[i].detach().float().cpu(),
+                        'ir': x_cond[i, :3, :, :].detach(),
+                        'vi': x_cond[i, 3:, :, :].detach(),
+                        'fusion': pred_x[i].detach(),
                     }
                     os.makedirs(os.path.join(image_folder, type, "grid"), exist_ok=True)
                     mult_img_dict_path = os.path.join(os.path.join(image_folder, type, "grid", y[i]))

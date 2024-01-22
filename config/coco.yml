@@ -6,7 +6,6 @@ data:
   rescaled: true
   data_dir: "/data2/wait/bisheCode/DDPM_Fusion/dataset/TXCJ"
   conditional: True
-  data_type: coco
 
 path:
   root: "/data2/wait/bisheCode/DDPM_Fusion"
@@ -19,7 +18,6 @@ path:
   fusion: "Fusion"
 
 model:
-  type: "simple"
   in_channels: 9
   out_ch: 3
   ch: 128
@@ -27,7 +25,7 @@ model:
   num_res_blocks: 2
   attn_resolutions: [ 32 ] # 16
   dropout: 0.0
-  ema_rate: 0.988
+  ema_rate: 0.999
   ema: True
   resamp_with_conv: True
 
@@ -43,7 +41,7 @@ training:
   epoch_freq: 100
 
 sampling:
-  batch_size: 1
+  batch_size: 2
   last_only: True
 
 optim:

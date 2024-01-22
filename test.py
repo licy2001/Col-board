@@ -1,48 +1,48 @@
+import sys
 import argparse
 import os
 import yaml
 import torch
 import numpy as np
-from functions.get_Dataset import Fusion
 from models.ddpm import DDPM
+from functions.get_Dataset import Restruction
 
 def parse_args_and_config():
     parser = argparse.ArgumentParser(
-        description="Restoring Weather with Patch-Based Denoising Diffusion Models"
+        description="Training Denoising Diffusion Models  For TXCJ"
     )
     parser.add_argument(
         "--config",
         type=str,
-        default="/data2/wait/bisheCode/DDPM_Fusion/config/Fusion.yml",
+        default="/data2/wait/bisheCode/DDPM_Fusion/config/test.yml",
         help="Path to the config file",
     )
-    parser.add_argument("--phase", type=str, default="test", help="val(generation)")
+    parser.add_argument("--phase", type=str, default="train", help="val(generation)")
     parser.add_argument(
         "--resume",
-        default="/data2/wait/bisheCode/DDPM_Fusion/results/CoCo/checkpoint/TXCJ_epoch_100.pth",
+        default="",
         type=str,
-        help="Path for the diffusion model checkpoint to load for evaluation",
-    )
-    parser.add_argument(
-        "--data",
-        default="/data2/wait/bisheCode/DDPM_Fusion/dataset/LLVIP",
-        type=str,
-        help="Path for the fusion data",
+        help="Path for checkpoint to load and resume",
     )
     parser.add_argument(
         "--timesteps",
         type=int,
         default=20,
-        help="10 Number of implicit sampling steps",
+        help="Number of implicit sampling steps for validation image",
     )
-
-    parser.add_argument("-gpu", "--gpu_ids", type=str, default="0")
     parser.add_argument(
         "--seed",
-        default=66,
+        default=61,
         type=int,
         metavar="N",
         help="Seed for initializing training (default: 61)",
+    )
+    parser.add_argument("-gpu", "--gpu_ids", type=str, default="2")
+    parser.add_argument(
+        "--name",
+        type=str,
+        default="TXCJ",
+        help="folder name to save outputs",
     )
     parser.add_argument(
         "--concat_type",
@@ -68,18 +68,15 @@ def dict2namespace(config):
         setattr(namespace, key, new_value)
     return namespace
 
+
 def main():
     args, config = parse_args_and_config()
-    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_ids
     # setup device to run
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_ids
+    # device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Using device: {}".format(device))
     config.device = device
-
-    if torch.cuda.is_available():
-        print(
-            "Note: Currently supports evaluations (restoration) when run only on a single GPU!"
-        )
 
     # set random seed
     torch.manual_seed(args.seed)
@@ -87,20 +84,15 @@ def main():
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
     torch.backends.cudnn.benchmark = True
-    # data loading
-    print("=> using dataset '{}'".format(args.data))
-    DATASET = Fusion(config)
 
-    dataloader = DATASET.get_fusion_loaders(
-        parent_dir=args.data,
-        data_type="LLVIP",
-        batch_size=1,
-    )
+    # data loading
+    print("=> using dataset '{}'".format(config.data.dataset))
+    DATASET = Restruction(config)
+
     # create model
-    print("=> creating denoising-diffusion model with wrapper...")
+    print("=> creating denoising-diffusion model...")
     diffusion = DDPM(args, config)
-    # diffusion.sample_validation(val_loader)
-    diffusion.Fusion_sample(dataloader, type="LLVIP")
+    diffusion.train(DATASET)
 
 
 if __name__ == "__main__":

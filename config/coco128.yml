@@ -1,10 +1,10 @@
 data:
-  dataset: "CoCo"
-  image_size: 256
+  dataset: "CoCo128"
+  image_size: 128
   channels: 3
   num_workers: 24
   rescaled: true
-  data_dir: "/data2/wait/bisheCode/DDPM_Fusion/dataset/TXCJ"
+  data_dir: "/data2/wait/bisheCode/DDPM_Fusion/dataset/TXCJ128"
   conditional: True
 
 path:
@@ -36,12 +36,12 @@ diffusion:
   num_diffusion_timesteps: 1000
 
 training:
-  batch_size: 4
+  batch_size: 20
   n_epochs: 10000
   epoch_freq: 100
 
 sampling:
-  batch_size: 2
+  batch_size: 10
   last_only: True
 
 optim:

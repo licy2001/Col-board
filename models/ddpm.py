@@ -204,86 +204,119 @@ class DDPM(object):
         ssim = self.ssim
 
         print(self.start_epoch)
-        for epoch in range(self.start_epoch, self.config.training.n_epochs):
-            data_start = time.time()
-            data_time = 0
-            epoch_loss = 0.0
-            epoch_start_time = time.time()
-            # 开启梯度更新
-            self.model.train()
-            for i, (x, y) in enumerate(tqdm(train_loader)):
-                self.optimizer.zero_grad()
-                self.step += 1
-                # n = current_batch_size
-                data_time += time.time() - data_start
-
-                x = x.to(self.device)
-                x = data_transform(x)
-                # antithetic sampling
-                x0 = x[:, 6:, :, :]
-                x_cond = x[:, :6, :, :]
-                # loss, x_t, pred_noise, pred_x0 = noise_estimation_loss(
-                #     self.model, x0, x_cond, t, e, b
-                # )
-                loss, x_t, eps, pred_noise, pred_x0 = self.get_loss(x0=x0, x_cond=x_cond)
-                self.logger.info(
-                    f"step: {self.step}\tloss: {loss.item():.8f}\tdata time: {data_time / (i + 1):.4f}"
-                )
-                loss.backward()
-                try:
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(), self.config.optim.grad_clip
-                    )
-                except Exception:
-                    pass
-                self.optimizer.step()
-
-                if self.config.model.ema:
-                    self.ema.update()
-                    # self.ema_helper.update(self.model)
-
-                # epoch_loss += loss.item() * current_batch_size
-                epoch_loss += loss.item()
-                if self.step % 100 == 0 or self.step == 1:
-                    mult_img_dict = {
-                        'cond1': inverse_data_transform(x[0, :3, :, :].detach()),
-                        'cond2': inverse_data_transform(x[0, 3:6, :, :].detach()),
-                        'xt': inverse_data_transform(x_t[0, ::].detach()),
-                        'noise': inverse_data_transform(eps[0, ::].detach()),
-                        'pred_noise': inverse_data_transform(pred_noise[0, ::].detach()),
-                        'pred_x0': inverse_data_transform(pred_x0[0, ::].detach()),
-                        'x0': inverse_data_transform(x[0, 6:, ::].detach())
-                    }
-                    os.makedirs(self.generate_process_dir, exist_ok=True)
-                    mult_img_dict_path = os.path.join(self.generate_process_dir, f"grid_mult_img{self.step}.png")
-                    save_image_dict(mult_img_dict, mult_img_dict_path)
-                # if end
+        try:
+            for epoch in range(self.start_epoch, self.config.training.n_epochs):
                 data_start = time.time()
-            # per train_loader end
-            average_epoch_loss = epoch_loss / len(train_loader.dataset)
-            epochs_losses.append(average_epoch_loss)
-            os.makedirs(self.figure_dir, exist_ok=True)
-            loss_plot(epochs_losses, os.path.join(self.figure_dir, "loss.png"), x_label="Epoch", y_label="Loss")
-            loss_table(epochs_losses, os.path.join(self.figure_dir, "loss.xlsx"), y1_label="Epoch", y2_label="Loss")
+                data_time = 0
+                epoch_loss = 0.0
+                epoch_start_time = time.time()
+                # 开启梯度更新
+                self.model.train()
+                for i, (x, y) in enumerate(tqdm(train_loader)):
+                    self.optimizer.zero_grad()
+                    self.step += 1
+                    # n = current_batch_size
+                    data_time += time.time() - data_start
 
-            ###### per 1 epoch 计算PSNR
-            if epoch % 1 == 0:
-                print(f"start val sample at epoch: {epoch}")
-                avg_psnr, avg_ssim = self.val_sample(val_loader, epoch)
-                psnr.append(avg_psnr)
-                ssim.append(avg_ssim)
-                loss_plot(psnr, os.path.join(self.figure_dir, "psnr.png"), y_label="PSNR")
-                loss_table(psnr, os.path.join(self.figure_dir, "psnr.xlsx"), y1_label="Epoch", y2_label="PSNR")
-                loss_plot(ssim, os.path.join(self.figure_dir, "ssim.png"), y_label="SSIM")
-                loss_table(ssim, os.path.join(self.figure_dir, "ssim.xlsx"), y1_label="Epoch", y2_label="SSIM")
-                self.logger_val.info(
-                    "<epoch:{}\titer:{}>\tpsnr: {:.4f}\tssim: {:.4f}".format(epoch, self.step,
-                                                                             avg_psnr, avg_ssim)
-                )
-                if avg_psnr > best_psnr:
-                    best_psnr = avg_psnr
-                    ckpt_save_path = os.path.join(self.checkpoint_dir, self.args.name + "_" + "best")
-                    self.logger.info("Saving best_psnr models and training states in {}.".format(ckpt_save_path))
+                    x = x.to(self.device)
+                    x = data_transform(x)
+                    # antithetic sampling
+                    x0 = x[:, 6:, :, :]
+                    x_cond = x[:, :6, :, :]
+                    # loss, x_t, pred_noise, pred_x0 = noise_estimation_loss(
+                    #     self.model, x0, x_cond, t, e, b
+                    # )
+                    loss, x_t, eps, pred_noise, pred_x0 = self.get_loss(x0=x0, x_cond=x_cond)
+                    self.logger.info(
+                        f"step: {self.step}\tloss: {loss.item():.8f}\tdata time: {data_time / (i + 1):.4f}"
+                    )
+                    loss.backward()
+                    try:
+                        torch.nn.utils.clip_grad_norm_(
+                            self.model.parameters(), self.config.optim.grad_clip
+                        )
+                    except Exception:
+                        pass
+                    self.optimizer.step()
+
+                    if self.config.model.ema:
+                        self.ema.update()
+                        # self.ema_helper.update(self.model)
+
+                    # epoch_loss += loss.item() * current_batch_size
+                    epoch_loss += loss.item()
+                    data_start = time.time()
+                    # 保存训练过程图片
+                    if self.step % 50 == 0 or self.step == 1:
+                        mult_img_dict = {
+                            'cond1': inverse_data_transform(x[0, :3, :, :].detach()),
+                            'cond2': inverse_data_transform(x[0, 3:6, :, :].detach()),
+                            'xt': inverse_data_transform(x_t[0, ::].detach()),
+                            'noise': inverse_data_transform(eps[0, ::].detach()),
+                            'pred_noise': inverse_data_transform(pred_noise[0, ::].detach()),
+                            'pred_x0': inverse_data_transform(pred_x0[0, ::].detach()),
+                            'x0': inverse_data_transform(x[0, 6:, ::].detach())
+                        }
+                        os.makedirs(self.generate_process_dir, exist_ok=True)
+                        mult_img_dict_path = os.path.join(self.generate_process_dir, f"grid_mult_img{self.step}.png")
+                        save_image_dict(mult_img_dict, mult_img_dict_path)
+                # per train_loader end
+
+                mult_img_dict = {
+                    'cond1': inverse_data_transform(x[0, :3, :, :].detach()),
+                    'cond2': inverse_data_transform(x[0, 3:6, :, :].detach()),
+                    'xt': inverse_data_transform(x_t[0, ::].detach()),
+                    'noise': inverse_data_transform(eps[0, ::].detach()),
+                    'pred_noise': inverse_data_transform(pred_noise[0, ::].detach()),
+                    'pred_x0': inverse_data_transform(pred_x0[0, ::].detach()),
+                    'x0': inverse_data_transform(x[0, 6:, ::].detach())
+                }
+                os.makedirs(self.generate_process_dir, exist_ok=True)
+                mult_img_dict_path = os.path.join(self.generate_process_dir, f"grid_mult_img{self.step}.png")
+                save_image_dict(mult_img_dict, mult_img_dict_path)
+                average_epoch_loss = epoch_loss / len(train_loader.dataset)
+                epochs_losses.append(average_epoch_loss)
+                os.makedirs(self.figure_dir, exist_ok=True)
+                loss_plot(epochs_losses, os.path.join(self.figure_dir, "loss.png"), x_label="Epoch", y_label="Loss")
+                loss_table(epochs_losses, os.path.join(self.figure_dir, "loss.xlsx"), y1_label="Epoch", y2_label="Loss")
+
+                ###### per 1 epoch 计算PSNR
+                if epoch % 1 == 0:
+                    print(f"start val sample at epoch: {epoch}")
+                    avg_psnr, avg_ssim = self.val_sample(val_loader, epoch)
+                    psnr.append(avg_psnr)
+                    ssim.append(avg_ssim)
+                    loss_plot(psnr, os.path.join(self.figure_dir, "psnr.png"), y_label="PSNR")
+                    loss_table(psnr, os.path.join(self.figure_dir, "psnr.xlsx"), y1_label="Epoch", y2_label="PSNR")
+                    loss_plot(ssim, os.path.join(self.figure_dir, "ssim.png"), y_label="SSIM")
+                    loss_table(ssim, os.path.join(self.figure_dir, "ssim.xlsx"), y1_label="Epoch", y2_label="SSIM")
+                    self.logger_val.info(
+                        "<epoch:{}\titer:{}>\tpsnr: {:.4f}\tssim: {:.4f}".format(epoch, self.step,
+                                                                                 avg_psnr, avg_ssim)
+                    )
+                    if avg_psnr > best_psnr:
+                        best_psnr = avg_psnr
+                        ckpt_save_path = os.path.join(self.checkpoint_dir, self.args.name + "_" + "best")
+                        self.logger.info("Saving best_psnr models and training states in {}.".format(ckpt_save_path))
+                        save_checkpoint(
+                            {
+                                "loss": epochs_losses,
+                                "psnr": psnr,
+                                "ssim": ssim,
+                                "epoch": epoch,
+                                "step": self.step,
+                                "state_dict": self.model.state_dict(),  # 模型的状态字典
+                                "optimizer": self.optimizer.state_dict(),
+                                "ema": self.ema.state_dict(),  # ema的状态字典
+                                "params": self.args,
+                                "config": self.config,
+                            },
+                            filename=ckpt_save_path,
+                        )
+                # per 100 epoch save model
+                if epoch % 100 == 0:
+                    ckpt_save_path = os.path.join(self.checkpoint_dir, self.args.name + "_epoch_" + str(epoch))
+                    self.logger.info("Saving models and training states in {}.".format(ckpt_save_path))
                     save_checkpoint(
                         {
                             "loss": epochs_losses,
@@ -291,37 +324,39 @@ class DDPM(object):
                             "ssim": ssim,
                             "epoch": epoch,
                             "step": self.step,
-                            "state_dict": self.model.state_dict(),  # 模型的状态字典
+                            "state_dict": self.model.state_dict(),
                             "optimizer": self.optimizer.state_dict(),
-                            "ema": self.ema.state_dict(),  # ema的状态字典
+                            "ema": self.ema.state_dict(),
                             "params": self.args,
                             "config": self.config,
                         },
                         filename=ckpt_save_path,
                     )
-            # per 100 epoch save model
-            if epoch % 100 == 0:
-                ckpt_save_path = os.path.join(self.checkpoint_dir, self.args.name + "_epoch_" + str(epoch))
-                self.logger.info("Saving models and training states in {}.".format(ckpt_save_path))
-                save_checkpoint(
-                    {
-                        "loss": epochs_losses,
-                        "psnr": psnr,
-                        "ssim": ssim,
-                        "epoch": epoch,
-                        "step": self.step,
-                        "state_dict": self.model.state_dict(),
-                        "optimizer": self.optimizer.state_dict(),
-                        "ema": self.ema.state_dict(),
-                        "params": self.args,
-                        "config": self.config,
-                    },
-                    filename=ckpt_save_path,
+                epoch_time = time.time() - epoch_start_time
+                self.logger.info(
+                    f"epoch: {epoch}/{self.config.training.n_epochs}\tloss: {average_epoch_loss:.8f}\tper epoch time: {epoch_time}"
                 )
-            epoch_time = time.time() - epoch_start_time
-            self.logger.info(
-                f"epoch: {epoch}/{self.config.training.n_epochs}\tloss: {average_epoch_loss:.8f}\tper epoch time: {epoch_time}"
+        except Exception as e:
+            self.logger(f"Training was interrupted. Exception: {e}")
+            # 保存当前epoch时刻的模型
+            ckpt_save_path = os.path.join(self.checkpoint_dir, self.args.name + "_interrupt_epoch_" + str(epoch))
+            self.logger.info("Saving models and training states in {}.".format(ckpt_save_path))
+            save_checkpoint(
+                {
+                    "loss": epochs_losses,
+                    "psnr": psnr,
+                    "ssim": ssim,
+                    "epoch": epoch,
+                    "step": self.step,
+                    "state_dict": self.model.state_dict(),
+                    "optimizer": self.optimizer.state_dict(),
+                    "ema": self.ema.state_dict(),
+                    "params": self.args,
+                    "config": self.config,
+                },
+                filename=ckpt_save_path,
             )
+            raise e  # 重新抛出异常
 
     ###### 第一种采样
     # q(xt|x0)

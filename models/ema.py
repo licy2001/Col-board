@@ -1,8 +1,75 @@
 import torch.nn as nn
 
+"""
+ema = EMA(model, 0.999)
+ema.register()
+
+# 训练过程中，更新完参数后，同步update shadow weights
+def train():
+    optimizer.step()
+    ema.update()
+
+# eval前，apply shadow weights；eval之后，恢复原来模型的参数
+def evaluate():
+    ema.apply_shadow()
+    # evaluate
+    ema.restore()
+"""
+class EMA(object):
+    def __init__(self, model, decay):
+        # 如果模型是 DataParallel 的实例，获取原始模型
+        if isinstance(model, nn.DataParallel):
+            self.model = model.module
+        else:
+            self.model = model
+        self.decay = decay
+        self.shadow = {}
+        self.backup = {}
+
+    def register(self):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                self.shadow[name] = param.data.clone()
+
+    def update(self):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                assert name in self.shadow
+                new_average = (1.0 - self.decay) * param.data + self.decay * self.shadow[name]
+                self.shadow[name] = new_average.clone()
+
+    def apply_shadow(self):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                assert name in self.shadow
+                self.backup[name] = param.data
+                param.data = self.shadow[name]
+
+    def restore(self):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                assert name in self.backup
+                param.data = self.backup[name]
+        self.backup = {}
+
+    def state_dict(self):
+        return {
+            # 'model_state_dict': self.model.state_dict(),
+            'decay': self.decay,
+            'shadow': self.shadow,
+            'backup': self.backup
+        }
+
+    def load_state_dict(self, state_dict):
+        # self.model.load_state_dict(state_dict['model_state_dict'])
+        self.decay = state_dict['decay']
+        self.shadow = state_dict['shadow']
+        self.backup = state_dict['backup']
+
 
 class EMAHelper(object):
     def __init__(self, mu=0.999):
+        super.__init__()
         self.mu = mu
         self.shadow = {}
 
@@ -21,8 +88,10 @@ class EMAHelper(object):
             module = module.module
         for name, param in module.named_parameters():
             if param.requires_grad:
-                self.shadow[name].data = (
-                    1. - self.mu) * param.data + self.mu * self.shadow[name].data
+                assert name in self.shadow
+                new_average = (1.0 - self.mu) * param.data + self.mu * self.shadow[name]
+                self.shadow[name] = new_average.clone()
+                # self.shadow[name].data = (1. - self.mu) * param.data + self.mu * self.shadow[name].data
 
     def ema(self, module):
         """
@@ -35,6 +104,9 @@ class EMAHelper(object):
                 param.data.copy_(self.shadow[name].data)
 
     def ema_copy(self, module):
+        """
+        创建一个指数移动平均（Exponential Moving Average，EMA）版本的神经网络模型的副本
+        """
         if isinstance(module, nn.DataParallel):
             inner_module = module.module
             module_copy = type(inner_module)(
@@ -59,3 +131,5 @@ class EMAHelper(object):
         从给定的状态字典加载滑动平均版本
         """
         self.shadow = state_dict
+
+

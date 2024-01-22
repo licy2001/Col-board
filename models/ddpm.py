@@ -401,7 +401,7 @@ class DDPM(object):
 
     @torch.no_grad()
     def ddim_sample(self, xt, x_cond, eta=0):
-        self.logger_val.info(msg=f"DDIM Sampling images....")
+        # self.logger_val.info(msg=f"DDIM Sampling images....")
         # self.model.eval()
         n = xt.shape[0]
         # x0_preds = []

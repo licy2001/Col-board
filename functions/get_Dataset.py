@@ -27,14 +27,12 @@ class Restruction:
             dir=os.path.join(self.config.data.data_dir, "train"),
             transforms=self.transforms,
             phase="val",
-            data_type=self.config.data.data_type,
         )
 
         val_dataset = RestructionDataset(
             dir=os.path.join(self.config.data.data_dir, "val"),
             transforms=self.transforms,
             phase="val",
-            data_type=self.config.data.data_type,
         )
 
         train_loader = torch.utils.data.DataLoader(
@@ -62,7 +60,6 @@ class Restruction:
             dir=os.path.join(self.config.data.data_dir, "test"),
             transforms=self.transforms,
             phase="test",
-            data_type=self.config.data.data_type,
         )
 
         test_loader = torch.utils.data.DataLoader(
@@ -76,7 +73,7 @@ class Restruction:
 
 
 class RestructionDataset(torch.utils.data.Dataset):
-    def __init__(self, dir, transforms, phase="train", data_type="coco"):
+    def __init__(self, dir, transforms, phase="train"):
         super().__init__()
         source_dir = dir
         self.phase = phase

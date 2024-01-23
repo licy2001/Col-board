@@ -27,7 +27,7 @@ def parse_args_and_config():
     parser.add_argument(
         "--timesteps",
         type=int,
-        default=25,
+        default=20,
         help="Number of implicit sampling steps for validation image",
     )
     parser.add_argument(

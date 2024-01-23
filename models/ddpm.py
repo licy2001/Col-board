@@ -385,7 +385,7 @@ class DDPM(object):
                 )
         # except Exception as e:
         except KeyboardInterrupt:
-            self.logger.info(f"Training was interrupted. Exception: {e}")
+            # self.logger.info(f"Training was interrupted. Exception: {e}")
             # 保存当前epoch时刻的模型
             ckpt_save_path = os.path.join(self.checkpoint_dir, self.args.name + "_interrupt_epoch_" + str(epoch))
             self.logger.info("Saving models and training states in {}.".format(ckpt_save_path))
@@ -548,54 +548,6 @@ class DDPM(object):
                 xs.append(sample.to("cpu"))
         return xs, x0_preds
 
-    # 采样一张图片
-    @torch.no_grad()
-    def sample_image(
-            self,
-            x_cond,
-            xt,
-            last=True,
-            sample_type="generalized",
-            skip_type="uniform",
-    ):
-        """
-        sample_type:采样类型 generalized 和 ddpm_noisy
-        skip_type:步长跳过类型 uniform 和 quad
-        """
-        if sample_type == "generalized":
-            if skip_type == "uniform":
-                skip = self.num_timesteps // self.args.timesteps
-                seq = range(0, self.num_timesteps, skip)
-            elif skip_type == "quad":
-                seq = (
-                        np.linspace(
-                            0, np.sqrt(self.num_timesteps * 0.8), self.args.timesteps
-                        )
-                        ** 2
-                )
-                seq = [int(s) for s in list(seq)]
-
-            xt = self.generalized_steps(xt, x_cond, seq, eta=0.8)
-        elif sample_type == "ddpm_noisy":
-            if skip_type == "uniform":
-                skip = self.num_timesteps // self.args.timesteps
-                seq = range(0, self.num_timesteps, skip)
-            elif skip_type == "quad":
-                # else:
-                seq = (
-                        np.linspace(
-                            0, np.sqrt(self.num_timesteps * 0.8), self.args.timesteps
-                        )
-                        ** 2
-                )
-                seq = [int(s) for s in list(seq)]
-            xt = self.ddpm_steps(xt, x_cond, seq)
-
-        if last:
-            # xt = xt[0]
-            xt = xt[0][-1]
-        return xt
-
     def visualize_forward(self, val_loader):
         import cv2
         import einops
@@ -653,7 +605,6 @@ class DDPM(object):
             pred_x = xs[-1]
             pred_x = inverse_data_transform(pred_x)
             x_cond = inverse_data_transform(x_cond)
-            x_gt = inverse_data_transform(x_gt)
             for i in range(n):
                 per_img_psnr += calculate_psnr(pred_x[i], x_gt[i], test_y_channel=True)
                 per_img_ssim += calculate_ssim(pred_x[i], x_gt[i])

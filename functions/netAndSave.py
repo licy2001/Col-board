@@ -25,7 +25,7 @@ def save_image_list(image_list, output_path, format='png'):
 
         axes[i].imshow(img, cmap=cmap)
         axes[i].axis('off')
-        axes[i].set_title(f'I{i+1}')
+        axes[i].set_title(f'{i}')
 
     plt.savefig(output_path, format=format)
     plt.clf()

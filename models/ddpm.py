@@ -177,16 +177,13 @@ class DDPM(object):
         """
         t = self.sample_timestep(x0.shape[0], symmetric=False, big_range=True)
         eps = torch.randn_like(x0).to(self.device)
-        eps = torch.clamp(eps, -1, 1)
         xt = self.sample_forward(x0, t, eps)
         model_input = self.get_model_input(x_cond, xt)
         eps_theta = self.model(model_input, t.float())
-        eps_theta = torch.clamp(eps_theta, -1, 1)
 
         x0_coef1 = self.extract(self.sqrt_recip_alphas_bar, t)
         x0_coef2 = self.extract(self.sqrt_one_minus_alphas_bar, t)
         pred_x0 = x0_coef1 * (xt - x0_coef2 * eps_theta)
-        pred_x0 = torch.clamp(pred_x0, -1, 1)
         loss_fn = torch.nn.MSELoss(reduction="mean")
         # loss_fn = torch.nn.MSELoss(size_average=True, reduce=True, reduction="sum")
         loss = loss_fn(eps_theta, eps) * self.config.training.batch_size
@@ -281,7 +278,7 @@ class DDPM(object):
                 loss_table(epochs_losses, os.path.join(self.figure_dir, "loss.xlsx"), y1_label="Epoch", y2_label="Loss")
 
                 ###### per 1 epoch 计算PSNR
-                if epoch % 1 == 0:
+                if epoch % 20 == 0:
                     print(f"start val sample at epoch: {epoch}")
                     avg_psnr, avg_ssim = self.val_sample(val_loader, epoch)
                     psnr.append(avg_psnr)
@@ -337,7 +334,7 @@ class DDPM(object):
                     f"epoch: {epoch}/{self.config.training.n_epochs}\tloss: {average_epoch_loss:.8f}\tper epoch time: {epoch_time}"
                 )
         except Exception as e:
-            self.logger(f"Training was interrupted. Exception: {e}")
+            self.logger.info(f"Training was interrupted. Exception: {e}")
             # 保存当前epoch时刻的模型
             ckpt_save_path = os.path.join(self.checkpoint_dir, self.args.name + "_interrupt_epoch_" + str(epoch))
             self.logger.info("Saving models and training states in {}.".format(ckpt_save_path))
@@ -366,7 +363,6 @@ class DDPM(object):
         # if eps is None:
         #     eps = torch.randn_like(x0)
         res = coef1 * x0 + coef2 * eps
-        res = torch.clamp(res, -1, 1)
         return res
 
     # q(x0|xt)
@@ -405,7 +401,6 @@ class DDPM(object):
             else:
                 var = self.extract(self.p_variance, t)
             noise = torch.randn_like(xt)
-            noise = torch.clamp(noise, -1, 1)
             noise *= torch.sqrt(var)
 
         if clip_x0:
@@ -435,7 +430,7 @@ class DDPM(object):
         return time_step
 
     @torch.no_grad()
-    def ddim_sample(self, xt, x_cond, eta=0):
+    def ddim_sample(self, xt, x_cond, eta=1):
         # self.logger_val.info(msg=f"DDIM Sampling images....")
         # self.model.eval()
         n = xt.shape[0]
@@ -456,10 +451,8 @@ class DDPM(object):
                 noise = torch.randn_like(xt, dtype=torch.float32)
             else:
                 noise = torch.zeros_like(xt, dtype=torch.float32)
-            noise = torch.clamp(noise, -1, 1) # 加的
             model_input = self.get_model_input(xt, x_cond)
             eps_theta = self.model(model_input, t.float())
-            eps_theta = torch.clamp(eps_theta, -1, 1) # 加的
             # Calculation formula
             # xt = xs[-1].to(self.device)
             x0_t = (xt - (eps_theta * torch.sqrt(1 - alpha_t))) / torch.sqrt(alpha_t)
@@ -468,7 +461,6 @@ class DDPM(object):
             c1 = eta * torch.sqrt((1 - alpha_t / alpha_prev) * (1 - alpha_prev) / (1 - alpha_t))
             c2 = torch.sqrt((1 - alpha_prev) - c1 ** 2)
             xt = torch.sqrt(alpha_prev) * x0_t + c2 * eps_theta + c1 * noise
-            xt = torch.clamp(xt, -1, 1) # 加的
             # xs.append(xt.to('cpu'))
         return xt
 
@@ -490,17 +482,14 @@ class DDPM(object):
                 et = self.model(model_input, t.float())
 
                 x_0 = (xt - et * torch.sqrt(1 - at)) / torch.sqrt(at)
-                x_0 = torch.clamp(x_0, -1, 1)
                 x0_preds.append(x_0.to("cpu"))
                 mean_eps = ((torch.sqrt(atm1) * beta_t) * x_0 + (torch.sqrt(1 - beta_t) * (1 - atm1)) * xt) / (1.0 - at)
 
                 noise = torch.randn_like(xt)
-                noise = torch.clamp(noise, -1, 1)
                 mask = 1 - (t == 0).float()
                 mask = mask.view(-1, 1, 1, 1)
                 logvar = torch.log(beta_t)
                 sample = mean_eps + mask * torch.exp(0.5 * logvar) * noise
-                sample = torch.clamp(sample, -1, 1)
                 xs.append(sample.to("cpu"))
         return xs, x0_preds
 
@@ -568,7 +557,6 @@ class DDPM(object):
             i = int(self.num_timesteps * percent)
             t = (torch.ones(n) * i).to(x.device)
             eps = torch.randn_like(x0)
-            eps = torch.clamp(eps, -1, 1)
             xt = self.sample_forward(x0, t, eps)
             xts.append(xt)
         res = torch.stack(xts, 0)
@@ -583,7 +571,7 @@ class DDPM(object):
     # 训练的时候进行验证集采样来看psnr ssim 以及采样结果
     @torch.no_grad()
     def val_sample(self, val_loader, epoch):
-        self.ema.apply_shadow()  # 应用 EMA 影子参数
+        # self.ema.apply_shadow()  # 应用 EMA 影子参数
         self.model.eval()
         image_floder = image_folder = os.path.join(self.val_sample_dir, "epoch_{:04d}".format(epoch))
         os.makedirs(image_floder, exist_ok=True)
@@ -598,16 +586,9 @@ class DDPM(object):
             x_gt = x[:, 6:, ::]
             # x_cond = data_transform(x_cond)
             xt = torch.randn(x_gt.shape, dtype=torch.float32).to(self.device)
-            pred_x = self.ddim_sample(xt, x_cond, eta=0)
-            # 第一个办法
-            # pred_x = self.sample_image(
-            #     x_cond,
-            #     xt,
-            #     last=True,
-            #     sample_type="generalized",
-            #     skip_type="uniform",
-            # )
-            # 第二个办法
+            # ddim 采样
+            pred_x = self.ddim_sample(xt, x_cond, eta=1)
+            # ddpm采样
             # pred_x = self.sample_backward(xt, x_cond, simple_var=True, clip_x0=True)
             pred_x = inverse_data_transform(pred_x)
             x_cond = inverse_data_transform(x_cond)
@@ -626,38 +607,40 @@ class DDPM(object):
 
         avg_psnr = per_img_psnr / len(val_loader.dataset)
         avg_ssim = per_img_ssim / len(val_loader.dataset)
-        self.ema.restore()  # 恢复原始模型参数
+        # self.ema.restore()  # 恢复原始模型参数
         return avg_psnr, avg_ssim
 
     # 对测试集进行采样
     @torch.no_grad()
-    def test_sample(self, test_loader, type):
+    def test_sample(self, DATASET, type):
         """
         type: 路径名
         """
-        self.load_ddm_ckpt(self.args.resume, ema=True, train=True)
-        self.ema.apply_shadow()  # 应用 EMA 影子参数获得平滑后的参数
+        test_loader = DATASET.get_test_loaders()
+        self.load_ddm_ckpt(self.args.resume, ema=False, train=False)
+        # self.ema.apply_shadow()  # 应用 EMA 影子参数获得平滑后的参数
         self.model.eval()
         image_folder = self.test_sample_dir
-        self.logger.info(f"Processing test images at step: {self.start_epoch}")
+        self.logger_val.info(f"Processing test images at step: {self.start_epoch}")
         per_img_psnr = 0.0
         per_img_ssim = 0.0
         for _, (x, y) in enumerate(tqdm(test_loader)):
             n = x.shape[0]
             x = data_transform(x)
-            x_cond = x[:, :6, :, :].to(self.device)
-            x_gt = x[:, 6:, ::].to(self.device)
+            x = x.to(self.device)
+            x_cond = x[:, :6, :, :]
+            x_gt = x[:, 6:, ::]
             shape = x_gt.shape
             xt = torch.randn(shape, device=self.device)
-            xt = torch.clamp(xt, -1, 1)
             # 第一个办法
-            pred_x = self.sample_image(
-                x_cond,
-                xt,
-                last=True,
-                sample_type="generalized",
-                skip_type="uniform",
-            )
+            # pred_x = self.sample_image(
+            #     x_cond,
+            #     xt,
+            #     last=True,
+            #     sample_type="generalized",
+            #     skip_type="uniform",
+            # )
+            pred_x = self.ddim_sample(xt, x_cond, eta=0)
             # 第二个办法
             # pred_x = self.sample_backward(
             #     x_t=x, x_cond=x_cond, simple_var=True, clip_x0=True
@@ -692,7 +675,7 @@ class DDPM(object):
                 )
         avg_psnr = per_img_psnr / len(test_loader.dataset)
         avg_ssim = per_img_ssim / len(test_loader.dataset)
-        self.ema.restore()  # 恢复原始模型参数
+        # self.ema.restore()  # 恢复原始模型参数
         return avg_psnr, avg_ssim
 
     # 采样融合结果
@@ -701,9 +684,9 @@ class DDPM(object):
         """
         type: 路径名
         """
-        self.load_ddm_ckpt(self.args.resume, ema=True, train=True)
-        self.ema.apply_shadow()  # 应用 EMA 影子参数获得平滑后的参数
-        self.model.eval()
+        self.load_ddm_ckpt(self.args.resume, ema=False, train=True)
+        # self.ema.apply_shadow()  # 应用 EMA 影子参数获得平滑后的参数
+        # self.model.eval()
         image_folder = os.path.join(self.fusion_dir, type)
         os.makedirs(image_folder, exist_ok=True)
         self.logger_val.info(f"Processing test images at step: {self.start_epoch}")
@@ -713,7 +696,6 @@ class DDPM(object):
             x_cond = x.to(self.device)
             shape = x_cond[:, :3, :, :].shape
             xt = torch.randn(shape, device=self.device)
-            xt = torch.clamp(xt, -1, 1)
             # xt = xt.to(self.device)
             # 第一个办法
             # pred_x = self.sample_image(
@@ -724,7 +706,8 @@ class DDPM(object):
             #     skip_type="uniform",
             # )
             # 第二个办法
-            pred_x = self.sample_backward(xt, x_cond, simple_var=True, clip_x0=True)
+            # pred_x = self.sample_backward(xt, x_cond, simple_var=True, clip_x0=True)
+            pred_x = self.ddim_sample(xt, x_cond, eta=0)
             pred_x = inverse_data_transform(pred_x)
             x_cond = inverse_data_transform(x_cond)
 
@@ -743,7 +726,7 @@ class DDPM(object):
                 save_image(x_cond[:, :3, :, :][i], os.path.join(image_folder, "ir", y[i]))
                 os.makedirs(os.path.join(image_folder, "vi"), exist_ok=True)
                 save_image(x_cond[:, 3:, :, :][i], os.path.join(image_folder, "vi", y[i]))
-        self.ema.restore()  # 恢复原始模型参数
+        # self.ema.restore()  # 恢复原始模型参数
 
 
 if __name__ == '__main__':

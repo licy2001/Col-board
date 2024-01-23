@@ -35,7 +35,7 @@ class EMA(object):
         for name, param in self.model.named_parameters():
             if param.requires_grad:
                 assert name in self.shadow
-                new_average = (1.0 - self.decay) * param.data + self.decay * self.shadow[name]
+                new_average = (1.0 - self.decay) * param.data.to("cuda") + self.decay * self.shadow[name].to("cuda")
                 self.shadow[name] = new_average.clone()
 
     def apply_shadow(self):
@@ -68,7 +68,7 @@ class EMA(object):
 
 
 class EMAHelper(object):
-    def __init__(self, mu=0.999):
+    def __init__(self, mu=0.9999):
         super.__init__()
         self.mu = mu
         self.shadow = {}

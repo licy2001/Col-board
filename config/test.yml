@@ -1,12 +1,11 @@
 data:
-  dataset: "Test"
-  image_size: 256
+  dataset: "CoCo128"
+  image_size: 128
   channels: 3
   num_workers: 24
   rescaled: true
   data_dir: "/data2/wait/bisheCode/DDPM_Fusion/dataset/TXCJ"
   conditional: True
-  data_type: coco
 
 path:
   root: "/data2/wait/bisheCode/DDPM_Fusion"
@@ -19,7 +18,6 @@ path:
   fusion: "Fusion"
 
 model:
-  type: "simple"
   in_channels: 9
   out_ch: 3
   ch: 128
@@ -27,8 +25,8 @@ model:
   num_res_blocks: 2
   attn_resolutions: [ 32 ] # 16
   dropout: 0.0
-  ema_rate: 0.988
-  ema: True
+  ema_rate: 0.995
+  ema: False
   resamp_with_conv: True
 
 diffusion:
@@ -38,14 +36,16 @@ diffusion:
   num_diffusion_timesteps: 1000
 
 training:
-  batch_size: 1
+  batch_size: 20
   n_epochs: 10000
   epoch_freq: 100
 
 sampling:
-  batch_size: 1
+  batch_size: 10
   last_only: True
 
+testing:
+  batch_size: 10
 optim:
   weight_decay: 0.000
   optimizer: "Adam"

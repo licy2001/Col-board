@@ -14,10 +14,10 @@ def parse_args_and_config():
     parser.add_argument(
         "--config",
         type=str,
-        default="/data2/wait/bisheCode/DDPM_Fusion/config/coco128.yml",
+        default="/data2/wait/bisheCode/DDPM_Fusion/config/visible.yml",
         help="Path to the config file",
     )
-    parser.add_argument("--phase", type=str, default="train", help="val(generation)")
+    # parser.add_argument("--phase", type=str, default="train", help="val(generation)")
     parser.add_argument(
         "--resume",
         default="",
@@ -37,7 +37,7 @@ def parse_args_and_config():
         metavar="N",
         help="Seed for initializing training (default: 61)",
     )
-    parser.add_argument("-gpu", "--gpu_ids", type=str, default="2")
+    parser.add_argument("-gpu", "--gpu_ids", type=str, default="0")
     parser.add_argument(
         "--name",
         type=str,
@@ -47,7 +47,7 @@ def parse_args_and_config():
     parser.add_argument(
         "--concat_type",
         type=str,
-        default="AXB",
+        default="ABX",
         help="the concat type of condition Image",
     )
     args = parser.parse_args()

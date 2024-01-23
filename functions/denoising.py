@@ -9,7 +9,7 @@ def compute_alpha(beta, t):
     return a
 
 
-def generalized_steps(x, x_cond, seq, model, b, eta=1.0):
+def generalized_steps(x, x_cond, seq, model, b, kwargs):
     with torch.no_grad():
         n = x.size(0)
         seq_next = [-1] + list(seq[:-1])

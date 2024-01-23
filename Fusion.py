@@ -16,30 +16,29 @@ def parse_args_and_config():
         default="/data2/wait/bisheCode/DDPM_Fusion/config/Fusion.yml",
         help="Path to the config file",
     )
-    parser.add_argument("--phase", type=str, default="test", help="val(generation)")
     parser.add_argument(
         "--resume",
-        default="/data2/wait/bisheCode/DDPM_Fusion/results/CoCo/checkpoint/TXCJ_epoch_100.pth",
+        default="/data2/wait/bisheCode/DDPM_Fusion/results/CoCo128/checkpoint/TXCJ_epoch_1700.pth",
         type=str,
         help="Path for the diffusion model checkpoint to load for evaluation",
     )
     parser.add_argument(
         "--data",
-        default="/data2/wait/bisheCode/DDPM_Fusion/dataset/LLVIP",
+        default="/data2/wait/bisheCode/DDPM_Fusion/dataset/TNO",
         type=str,
         help="Path for the fusion data",
     )
     parser.add_argument(
         "--timesteps",
         type=int,
-        default=20,
+        default=25,
         help="10 Number of implicit sampling steps",
     )
 
-    parser.add_argument("-gpu", "--gpu_ids", type=str, default="0")
+    parser.add_argument("-gpu", "--gpu_ids", type=str, default="2")
     parser.add_argument(
         "--seed",
-        default=66,
+        default=61,
         type=int,
         metavar="N",
         help="Seed for initializing training (default: 61)",
@@ -93,14 +92,13 @@ def main():
 
     dataloader = DATASET.get_fusion_loaders(
         parent_dir=args.data,
-        data_type="LLVIP",
         batch_size=1,
     )
     # create model
     print("=> creating denoising-diffusion model with wrapper...")
     diffusion = DDPM(args, config)
     # diffusion.sample_validation(val_loader)
-    diffusion.Fusion_sample(dataloader, type="LLVIP")
+    diffusion.Fusion_sample(dataloader, type="TNO")
 
 
 if __name__ == "__main__":

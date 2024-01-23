@@ -17,17 +17,16 @@ def parse_args_and_config():
         default="/data2/wait/bisheCode/DDPM_Fusion/config/test.yml",
         help="Path to the config file",
     )
-    parser.add_argument("--phase", type=str, default="train", help="val(generation)")
     parser.add_argument(
         "--resume",
-        default="",
+        default="/data2/wait/bisheCode/DDPM_Fusion/results/CoCo128/checkpoint/TXCJ_epoch_100.pth",
         type=str,
         help="Path for checkpoint to load and resume",
     )
     parser.add_argument(
         "--timesteps",
         type=int,
-        default=20,
+        default=25,
         help="Number of implicit sampling steps for validation image",
     )
     parser.add_argument(
@@ -37,13 +36,7 @@ def parse_args_and_config():
         metavar="N",
         help="Seed for initializing training (default: 61)",
     )
-    parser.add_argument("-gpu", "--gpu_ids", type=str, default="2")
-    parser.add_argument(
-        "--name",
-        type=str,
-        default="TXCJ",
-        help="folder name to save outputs",
-    )
+    parser.add_argument("-gpu", "--gpu_ids", type=str, default="0")
     parser.add_argument(
         "--concat_type",
         type=str,
@@ -92,7 +85,7 @@ def main():
     # create model
     print("=> creating denoising-diffusion model...")
     diffusion = DDPM(args, config)
-    diffusion.train(DATASET)
+    diffusion.test_sample(DATASET, type="coco128")
 
 
 if __name__ == "__main__":

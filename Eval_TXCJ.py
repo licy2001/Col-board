@@ -17,7 +17,6 @@ def parse_args_and_config():
         default="/data2/wait/bisheCode/DDPM_Fusion/config/coco.yml",
         help="Path to the config file",
     )
-    parser.add_argument("--phase", type=str, default="Test", help="val(generation)")
     parser.add_argument(
         "--resume",
         default="/data2/wait/bisheCode/DDPM_Fusion/experiments/TXCJ/checkpoint/Restruction/TXCJ_301.pth",
@@ -38,12 +37,6 @@ def parse_args_and_config():
         help="Seed for initializing training (default: 61)",
     )
     parser.add_argument("-gpu", "--gpu_ids", type=str, default="0")
-    parser.add_argument(
-        "--name",
-        type=str,
-        default="TXCJ",
-        help="folder name to save outputs",
-    )
     args = parser.parse_args()
 
     with open(os.path.join("configs", args.config), "r") as f:

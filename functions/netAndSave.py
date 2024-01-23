@@ -6,7 +6,31 @@ from matplotlib import pyplot as plt
 import pandas as pd
 import logging
 
-def save_image_dict(image_dict, output_path, type='png'):
+def save_image_list(image_list, output_path, format='png'):
+    fig, axes = plt.subplots(1, len(image_list), figsize=(20, 4))
+
+    for i in range(len(image_list)):
+        img = image_list[i].to(torch.float32).cpu()
+
+        if img.ndim == 4 and img.shape[0] == 1:
+            img = img.squeeze(0)
+
+        img = img.permute(1, 2, 0).numpy()
+
+        if img.shape[2] == 1:
+            img = img.squeeze()
+            cmap = 'gray'
+        else:
+            cmap = None
+
+        axes[i].imshow(img, cmap=cmap)
+        axes[i].axis('off')
+        axes[i].set_title(f'I{i+1}')
+
+    plt.savefig(output_path, format=format)
+    plt.clf()
+    plt.close("all")
+def save_image_dict(image_dict, output_path, type='png', facecolor='white', edgecolor='white', transparent=False):
     """
     mult_img_list 是一个包含了PyTorch张量图像的字典
     """

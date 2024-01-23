@@ -65,9 +65,10 @@ class Restruction:
         test_loader = torch.utils.data.DataLoader(
             test_dataset,
             batch_size=self.config.testing.batch_size,
-            shuffle=True,
+            shuffle=False,
             num_workers=self.config.data.num_workers,
             pin_memory=True,
+            drop_last=True,
         )
         return test_loader
 
@@ -137,12 +138,11 @@ class Fusion:
             ]
         )
 
-    def get_fusion_loaders(self, parent_dir, data_type, batch_size, num_works=24):
+    def get_fusion_loaders(self, parent_dir, batch_size, num_works=24):
         print("=> Utilizing the RestructionDataset() for fusion data loading...")
         fusion_dataset = FusionDataset(
             dir=parent_dir,
             transforms=self.transforms,
-            data_type=data_type,
         )
 
         fusion_loader = torch.utils.data.DataLoader(

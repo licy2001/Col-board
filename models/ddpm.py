@@ -7,10 +7,12 @@ import time
 import numpy as np
 from tqdm import tqdm
 import torch
+import torch.nn as nn
+import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
 from torchvision.transforms import ToPILImage
 from models.unet import UNet
-from models.ema import EMAHelper, EMA
+from models.ema import EMA
 from functions.netAndSave import (
     load_checkpoint,
     save_image,
@@ -20,6 +22,7 @@ from functions.netAndSave import (
     loss_table,
     setup_logger,
     save_image_dict,
+    save_image_list
 )
 from functions.get_Optimizer import get_optimizer
 from functions.losses import noise_estimation_loss
@@ -27,22 +30,82 @@ from functions.data_Process import data_transform, inverse_data_transform
 from functions.metrics import calculate_psnr, calculate_ssim
 
 
+class EMAHelper(object):
+    def __init__(self, mu=0.9999):
+        self.mu = mu
+        self.shadow = {}
+
+    def register(self, module):
+        if isinstance(module, nn.DataParallel):
+            module = module.module
+        for name, param in module.named_parameters():
+            if param.requires_grad:
+                self.shadow[name] = param.data.clone()
+
+    def update(self, module):
+        if isinstance(module, nn.DataParallel):
+            module = module.module
+        for name, param in module.named_parameters():
+            if param.requires_grad:
+                self.shadow[name].data = (1.0 - self.mu) * param.data.to(
+                    self.shadow[name].device
+                ) + self.mu * self.shadow[name].data
+
+    def ema(self, module):
+        if isinstance(module, nn.DataParallel):
+            module = module.module
+        for name, param in module.named_parameters():
+            if param.requires_grad:
+                param.data.copy_(self.shadow[name].data)
+
+    def ema_copy(self, module):
+        if isinstance(module, nn.DataParallel):
+            inner_module = module.module
+            module_copy = type(inner_module)(inner_module.config).to(
+                inner_module.config.device
+            )
+            module_copy.load_state_dict(inner_module.state_dict())
+            module_copy = nn.DataParallel(module_copy)
+        else:
+            module_copy = type(module)(module.config).to(module.config.device)
+            module_copy.load_state_dict(module.state_dict())
+        self.ema(module_copy)
+        return module_copy
+
+    def state_dict(self):
+        return self.shadow
+
+    def load_state_dict(self, state_dict):
+        self.shadow = state_dict
+
+
 def get_beta_schedule(beta_schedule, *, beta_start, beta_end, num_diffusion_timesteps):
+    def sigmoid(x):
+        return 1 / (np.exp(-x) + 1)
+
     if beta_schedule == "quad":
-        betas = (torch.linspace(beta_start ** 0.5, beta_end ** 0.5, num_diffusion_timesteps, dtype=torch.float64) ** 2)
+        betas = (
+                np.linspace(
+                    beta_start ** 0.5,
+                    beta_end ** 0.5,
+                    num_diffusion_timesteps,
+                    dtype=np.float64,
+                )
+                ** 2
+        )
     elif beta_schedule == "linear":
-        betas = torch.linspace(
-            beta_start, beta_end, num_diffusion_timesteps, dtype=torch.float64
+        betas = np.linspace(
+            beta_start, beta_end, num_diffusion_timesteps, dtype=np.float64
         )
     elif beta_schedule == "const":
-        betas = beta_end * torch.ones(num_diffusion_timesteps, dtype=torch.float64)
+        betas = beta_end * np.ones(num_diffusion_timesteps, dtype=np.float64)
     elif beta_schedule == "jsd":  # 1/T, 1/(T-1), 1/(T-2), ..., 1
         betas = 1.0 / np.linspace(
             num_diffusion_timesteps, 1, num_diffusion_timesteps, dtype=np.float64
         )
     elif beta_schedule == "sigmoid":
-        betas = torch.linspace(-6, 6, num_diffusion_timesteps)
-        betas = torch.sigmoid(betas) * (beta_end - beta_start) + beta_start
+        betas = np.linspace(-6, 6, num_diffusion_timesteps)
+        betas = sigmoid(betas) * (beta_end - beta_start) + beta_start
     else:
         raise NotImplementedError(beta_schedule)
     assert betas.shape == (num_diffusion_timesteps,)
@@ -58,11 +121,9 @@ class DDPM(object):
         self.model.to(self.device)
         gpus = [1]
         self.model = torch.nn.DataParallel(self.model)
-        if self.config.model.ema:
-            self.ema = EMA(self.model, decay=self.config.model.ema_rate)
-            self.ema.register()
-            # self.ema_helper = EMAHelper(mu=self.config.model.ema_rate)
-            # self.ema_helper.register(self.model)
+        # if self.config.model.ema:
+        self.ema = EMAHelper(mu=0.9999)
+        self.ema.register(self.model)
         self.optimizer = get_optimizer(self.config, self.model.parameters())
         self.start_epoch, self.step = 0, 0
         self.epochs_loss, self.psnr, self.ssim = [], [], []
@@ -75,8 +136,7 @@ class DDPM(object):
         )
 
         # 参数
-        betas = betas.to(torch.float32).to(self.device)
-        self.betas = betas
+        betas = self.betas = torch.from_numpy(betas).float().to(self.device)
         self.num_timesteps = betas.shape[0]
         self.alphas = (1.0 - self.betas)
         self.alphas_bar = torch.cumprod(self.alphas, dim=0)
@@ -106,24 +166,20 @@ class DDPM(object):
             "Network G structure: {}, with parameters: {:,d}".format(net_struc_str, n)
         )
 
-    # Get the param of given timestep t
-    def extract(self, a: torch.Tensor, t: torch.Tensor):
-        batch_size = t.shape[0]
-        out = a.to(self.device).gather(0, t.long()).float()
-        out = out.reshape(batch_size, 1, 1, 1)
-        return out
-
     def load_ddm_ckpt(self, load_path, ema=False, train=True):
         print("checkpoint path:", load_path)
         checkpoint = load_checkpoint(load_path, None)
+        self.epochs_loss = checkpoint["loss"]
+        self.psnr = checkpoint["psnr"]
+        self.ssim = checkpoint["ssim"]
         self.start_epoch = checkpoint["epoch"]
         self.step = checkpoint["step"]
         self.model.load_state_dict(checkpoint["state_dict"], strict=True)
         if train:
             self.optimizer.load_state_dict(checkpoint["optimizer"])
-        if ema:
-            # self.ema_helper.ema(self.model)
             self.ema.load_state_dict(checkpoint["ema"])
+        if ema:
+            self.ema.ema(self.model)
         self.logger.info(
             "=> loaded checkpoint '{}' (epoch {}, step {})".format(
                 load_path, self.start_epoch, self.step
@@ -161,7 +217,14 @@ class DDPM(object):
             t = torch.randint(low=0, high=self.num_timesteps, size=(n,)).to(self.device)  # 生成n个随机时间步骤
         return t
 
-    def get_model_input(self, xt, x_cond):
+    # Get the param of given timestep t
+    def get_value_t(self, a, t):
+        """
+        得到t的索引元素
+        """
+        return a[t.long()][:, None, None, None].to(self.device).float()
+
+    def get_model_input(self, x_cond, xt):
         # print(self.args.concat_type)
         if self.args.concat_type == "ABX":
             model_input = torch.cat([x_cond, xt], dim=1)
@@ -175,14 +238,14 @@ class DDPM(object):
         """
         计算MSE损失
         """
-        t = self.sample_timestep(x0.shape[0], symmetric=False, big_range=True)
+        t = self.sample_timestep(x0.shape[0], symmetric=True, big_range=True)
         eps = torch.randn_like(x0).to(self.device)
         xt = self.sample_forward(x0, t, eps)
         model_input = self.get_model_input(x_cond, xt)
         eps_theta = self.model(model_input, t.float())
 
-        x0_coef1 = self.extract(self.sqrt_recip_alphas_bar, t)
-        x0_coef2 = self.extract(self.sqrt_one_minus_alphas_bar, t)
+        x0_coef1 = self.get_value_t(self.sqrt_recip_alphas_bar, t)
+        x0_coef2 = self.get_value_t(self.sqrt_one_minus_alphas_bar, t)
         pred_x0 = x0_coef1 * (xt - x0_coef2 * eps_theta)
         loss_fn = torch.nn.MSELoss(reduction="mean")
         # loss_fn = torch.nn.MSELoss(size_average=True, reduce=True, reduction="sum")
@@ -190,10 +253,10 @@ class DDPM(object):
         return loss, xt, eps, eps_theta, pred_x0
 
     def train(self, DATASET):
-        # cudnn.benchmark = True
+        cudnn.benchmark = True
         train_loader, val_loader = DATASET.get_loaders()
         if os.path.isfile(self.args.resume):
-            self.load_ddm_ckpt(self.args.resume, ema=True, train=True)
+            self.load_ddm_ckpt(self.args.resume, ema=False, train=True)
 
         best_psnr = 0
         epochs_losses = self.epochs_loss
@@ -208,13 +271,12 @@ class DDPM(object):
                 epoch_loss = 0.0
                 epoch_start_time = time.time()
                 # 开启梯度更新
-                self.model.train()
                 for i, (x, y) in enumerate(tqdm(train_loader)):
-                    self.optimizer.zero_grad()
+
                     self.step += 1
                     # n = current_batch_size
                     data_time += time.time() - data_start
-
+                    self.model.train()
                     x = x.to(self.device)
                     x = data_transform(x)
                     # antithetic sampling
@@ -223,22 +285,22 @@ class DDPM(object):
                     # loss, x_t, pred_noise, pred_x0 = noise_estimation_loss(
                     #     self.model, x0, x_cond, t, e, b
                     # )
+                    self.optimizer.zero_grad()
                     loss, x_t, eps, pred_noise, pred_x0 = self.get_loss(x0=x0, x_cond=x_cond)
                     self.logger.info(
                         f"step: {self.step}\tloss: {loss.item():.8f}\tdata time: {data_time / (i + 1):.4f}"
                     )
                     loss.backward()
-                    try:
-                        torch.nn.utils.clip_grad_norm_(
-                            self.model.parameters(), self.config.optim.grad_clip
-                        )
-                    except Exception:
-                        pass
+                    # try:
+                    #     torch.nn.utils.clip_grad_norm_(
+                    #         self.model.parameters(), self.config.optim.grad_clip
+                    #     )
+                    # except Exception:
+                    #     pass
                     self.optimizer.step()
 
-                    if self.config.model.ema:
-                        self.ema.update()
-                        # self.ema_helper.update(self.model)
+                    # if self.config.model.ema:
+                    self.ema.update(self.model)
 
                     # epoch_loss += loss.item() * current_batch_size
                     epoch_loss += loss.item()
@@ -258,19 +320,6 @@ class DDPM(object):
                         mult_img_dict_path = os.path.join(self.generate_process_dir, f"grid_mult_img{self.step}.png")
                         save_image_dict(mult_img_dict, mult_img_dict_path)
                 # per train_loader end
-
-                mult_img_dict = {
-                    'cond1': inverse_data_transform(x[0, :3, :, :].detach()),
-                    'cond2': inverse_data_transform(x[0, 3:6, :, :].detach()),
-                    'xt': inverse_data_transform(x_t[0, ::].detach()),
-                    'noise': inverse_data_transform(eps[0, ::].detach()),
-                    'pred_noise': inverse_data_transform(pred_noise[0, ::].detach()),
-                    'pred_x0': inverse_data_transform(pred_x0[0, ::].detach()),
-                    'x0': inverse_data_transform(x[0, 6:, ::].detach())
-                }
-                os.makedirs(self.generate_process_dir, exist_ok=True)
-                mult_img_dict_path = os.path.join(self.generate_process_dir, f"grid_mult_img{self.step}.png")
-                save_image_dict(mult_img_dict, mult_img_dict_path)
                 average_epoch_loss = epoch_loss / len(train_loader.dataset)
                 epochs_losses.append(average_epoch_loss)
                 os.makedirs(self.figure_dir, exist_ok=True)
@@ -278,7 +327,8 @@ class DDPM(object):
                 loss_table(epochs_losses, os.path.join(self.figure_dir, "loss.xlsx"), y1_label="Epoch", y2_label="Loss")
 
                 ###### per 1 epoch 计算PSNR
-                if epoch % 20 == 0:
+                if epoch % 10 == 0:
+                    self.model.eval()
                     print(f"start val sample at epoch: {epoch}")
                     avg_psnr, avg_ssim = self.val_sample(val_loader, epoch)
                     psnr.append(avg_psnr)
@@ -333,7 +383,8 @@ class DDPM(object):
                 self.logger.info(
                     f"epoch: {epoch}/{self.config.training.n_epochs}\tloss: {average_epoch_loss:.8f}\tper epoch time: {epoch_time}"
                 )
-        except Exception as e:
+        # except Exception as e:
+        except KeyboardInterrupt:
             self.logger.info(f"Training was interrupted. Exception: {e}")
             # 保存当前epoch时刻的模型
             ckpt_save_path = os.path.join(self.checkpoint_dir, self.args.name + "_interrupt_epoch_" + str(epoch))
@@ -353,15 +404,15 @@ class DDPM(object):
                 },
                 filename=ckpt_save_path,
             )
-            raise e  # 重新抛出异常
+            # raise e  # 重新抛出异常
 
     ###### 第一种采样
     # q(xt|x0)
     def sample_forward(self, x0, t, eps):
-        coef1 = self.extract(self.sqrt_alphas_bar, t)
-        coef2 = self.extract(self.sqrt_one_minus_alphas_bar, t)
-        # if eps is None:
-        #     eps = torch.randn_like(x0)
+        coef1 = self.get_value_t(self.sqrt_alphas_bar, t)
+        coef2 = self.get_value_t(self.sqrt_one_minus_alphas_bar, t)
+        if eps is None:
+            eps = torch.randn_like(x0)
         res = coef1 * x0 + coef2 * eps
         return res
 
@@ -397,21 +448,21 @@ class DDPM(object):
             noise = 0
         else:
             if simple_var:
-                var = self.extract(self.betas, t)
+                var = self.get_value_t(self.betas, t)
             else:
-                var = self.extract(self.p_variance, t)
+                var = self.get_value_t(self.p_variance, t)
             noise = torch.randn_like(xt)
             noise *= torch.sqrt(var)
 
         if clip_x0:
-            x0_coef1 = self.extract(self.sqrt_recip_alphas_bar, t)
-            x0_coef2 = self.extract(self.sqrt_one_minus_alphas_bar, t)
+            x0_coef1 = self.get_value_t(self.sqrt_recip_alphas_bar, t)
+            x0_coef2 = self.get_value_t(self.sqrt_one_minus_alphas_bar, t)
             x_0 = x0_coef1 * (xt - x0_coef2 * eps_theta)
             x_0 = torch.clip(x_0, -1, 1)
-            mean = self.extract(self.p_mean_coef1, t) * xt + self.extract(self.p_mean_coef2, t) * x_0
+            mean = self.get_value_t(self.p_mean_coef1, t) * xt + self.get_value_t(self.p_mean_coef2, t) * x_0
         else:
-            mu_coef1 = 1 / self.extract(self.sqrt_alphas, t)
-            mu_coef2 = (1 - self.extract(self.alphas, t)) / self.extract(self.sqrt_one_minus_alphas_bar, t)
+            mu_coef1 = 1 / self.get_value_t(self.sqrt_alphas, t)
+            mu_coef2 = (1 - self.get_value_t(self.alphas, t)) / self.get_value_t(self.sqrt_one_minus_alphas_bar, t)
             mean = mu_coef1 * (xt - mu_coef2 * eps_theta)
 
         x_t = mean + noise
@@ -430,39 +481,43 @@ class DDPM(object):
         return time_step
 
     @torch.no_grad()
-    def ddim_sample(self, xt, x_cond, eta=1):
-        # self.logger_val.info(msg=f"DDIM Sampling images....")
-        # self.model.eval()
+    def ddim_sample(self, xt, x_cond, eta=1.0):
+        """
+        return: xs, x0_preds
+        xs: xt的列表
+        x0_preds: x0的列表
+        """
         n = xt.shape[0]
-        # x0_preds = []
-        # xs = [xt]
+        x0_preds = []
+        xs = [xt]
         # get DDIM time_step
-        time_step = self.get_sample_step()
+        seq = self.get_sample_step()
         # The list of current time and previous time
-        for i, p_i in tqdm(time_step):
-            # Time step, creating a tensor of size n
-            t = (torch.ones(n) * i).long().to(self.device)
-            # Previous time step, creating a tensor of size n
-            p_t = (torch.ones(n) * p_i).long().to(self.device)
-            # Expand to a 4-dimensional tensor, and get the value according to the time step t
-            alpha_t = self.alphas_bar[t][:, None, None, None].to(self.device)
-            alpha_prev = self.alphas_bar[p_t][:, None, None, None].to(self.device)
+        for i, p_i in tqdm(seq):
             if i > 1:
-                noise = torch.randn_like(xt, dtype=torch.float32)
+                noise = torch.randn_like(xt)
             else:
-                noise = torch.zeros_like(xt, dtype=torch.float32)
-            model_input = self.get_model_input(xt, x_cond)
+                noise = torch.zeros_like(xt)
+            # Time step, creating a tensor of size n
+            t = (torch.ones(n) * i).to(self.device)
+            # Previous time step, creating a tensor of size n
+            p_t = (torch.ones(n) * p_i).to(self.device)
+            # Expand to a 4-dimensional tensor, and get the value according to the time step t
+            alpha_t = self.get_value_t(self.alphas_bar, t)
+            alpha_prev = self.get_value_t(self.alphas_bar, p_t)
+            xt = xs[-1].to(self.device)
+            model_input = self.get_model_input(x_cond, xt)
             eps_theta = self.model(model_input, t.float())
             # Calculation formula
-            # xt = xs[-1].to(self.device)
             x0_t = (xt - (eps_theta * torch.sqrt(1 - alpha_t))) / torch.sqrt(alpha_t)
-            x0_t = torch.clamp(x0_t, -1, 1)
-            # x0_preds.append(x0_t.to('cpu'))
+            ######
+            # x0_t = torch.clamp(x0_t, -1, 1)
+            x0_preds.append(x0_t.to('cpu'))
             c1 = eta * torch.sqrt((1 - alpha_t / alpha_prev) * (1 - alpha_prev) / (1 - alpha_t))
             c2 = torch.sqrt((1 - alpha_prev) - c1 ** 2)
-            xt = torch.sqrt(alpha_prev) * x0_t + c2 * eps_theta + c1 * noise
-            # xs.append(xt.to('cpu'))
-        return xt
+            xt_prev = torch.sqrt(alpha_prev) * x0_t + c2 * eps_theta + c1 * noise
+            xs.append(xt_prev.to('cpu'))
+        return xs, x0_preds
 
     @torch.no_grad()
     def ddpm_steps(self, xt, x_cond, seq):
@@ -474,8 +529,8 @@ class DDPM(object):
             for i, j in zip(reversed(seq), reversed(seq_next)):
                 t = (torch.ones(n) * i).to(xt.device)
                 next_t = (torch.ones(n) * j).to(xt.device)
-                at = self.extract(self.alphas_bar, t)
-                atm1 = self.extract(self.alphas_bar, next_t)
+                at = self.get_value_t(self.alphas_bar, t)
+                atm1 = self.get_value_t(self.alphas_bar, next_t)
                 beta_t = 1 - at / atm1
                 xt = xs[-1].to("cuda:1")
                 model_input = self.get_model_input(x_cond, xt)
@@ -572,35 +627,40 @@ class DDPM(object):
     @torch.no_grad()
     def val_sample(self, val_loader, epoch):
         # self.ema.apply_shadow()  # 应用 EMA 影子参数
-        self.model.eval()
         image_floder = image_folder = os.path.join(self.val_sample_dir, "epoch_{:04d}".format(epoch))
         os.makedirs(image_floder, exist_ok=True)
-        self.logger.info(f"Processing val images at epoch: {epoch}")
         per_img_psnr = 0.0
         per_img_ssim = 0.0
         for i, (x, y) in enumerate(tqdm(val_loader)):
             n = x.shape[0]
-            x = data_transform(x)
-            x = x.to(self.device)
-            x_cond = x[:, :6, :, :]
+            x_cond = x[:, :6, :, :].to(self.device)
+            x_cond = data_transform(x_cond)
             x_gt = x[:, 6:, ::]
+            shape = x_gt.shape
             # x_cond = data_transform(x_cond)
-            xt = torch.randn(x_gt.shape, dtype=torch.float32).to(self.device)
+            xt = torch.randn(size=shape, device=self.device)  # dtype=torch.float32,
             # ddim 采样
-            pred_x = self.ddim_sample(xt, x_cond, eta=1)
+            xs, x0_preds = self.ddim_sample(xt, x_cond)
+
+            mult_img_list_path1 = os.path.join(os.path.join(image_folder, f"ddim_process_xs{0 + i * 10}.jpg"))
+            mult_img_list_path2 = os.path.join(os.path.join(image_folder, f"ddim_process_x0_preds{0 + i * 10}.jpg"))
+            list1 = [inverse_data_transform(s[0]) for s in xs]
+            list2 = [inverse_data_transform(s[0]) for s in x0_preds]
+            save_image_list(list1, mult_img_list_path1)
+            save_image_list(list2, mult_img_list_path2)
             # ddpm采样
             # pred_x = self.sample_backward(xt, x_cond, simple_var=True, clip_x0=True)
+            pred_x = xs[-1]
             pred_x = inverse_data_transform(pred_x)
             x_cond = inverse_data_transform(x_cond)
             x_gt = inverse_data_transform(x_gt)
             for i in range(n):
                 per_img_psnr += calculate_psnr(pred_x[i], x_gt[i], test_y_channel=True)
                 per_img_ssim += calculate_ssim(pred_x[i], x_gt[i])
-                mult_img_dict = {
-                    'cond1': x_cond[i, :3, :, :].detach(),
-                    'cond2': x_cond[i, 3:, :, :].detach(),
-                    'gt': x_gt[i].detach(),
-                    'pred': pred_x[i].detach(),
+                mult_img_dict = {'cond1': x_cond[i, :3, :, :],
+                                 'cond2': x_cond[i, 3:, :, :],
+                                 'gt': x_gt[i],
+                                 'pred': pred_x[i]
                 }
                 mult_img_dict_path = os.path.join(os.path.join(image_folder, y[i]))
                 save_image_dict(mult_img_dict, mult_img_dict_path)
@@ -617,8 +677,7 @@ class DDPM(object):
         type: 路径名
         """
         test_loader = DATASET.get_test_loaders()
-        self.load_ddm_ckpt(self.args.resume, ema=False, train=False)
-        # self.ema.apply_shadow()  # 应用 EMA 影子参数获得平滑后的参数
+        self.load_ddm_ckpt(self.args.resume, ema=False, train=True)
         self.model.eval()
         image_folder = self.test_sample_dir
         self.logger_val.info(f"Processing test images at step: {self.start_epoch}")
@@ -626,28 +685,19 @@ class DDPM(object):
         per_img_ssim = 0.0
         for _, (x, y) in enumerate(tqdm(test_loader)):
             n = x.shape[0]
-            x = data_transform(x)
-            x = x.to(self.device)
-            x_cond = x[:, :6, :, :]
+            x_cond = x[:, :6, :, :].to(self.device)
             x_gt = x[:, 6:, ::]
+            x_cond = data_transform(x_cond)
             shape = x_gt.shape
-            xt = torch.randn(shape, device=self.device)
-            # 第一个办法
-            # pred_x = self.sample_image(
-            #     x_cond,
-            #     xt,
-            #     last=True,
-            #     sample_type="generalized",
-            #     skip_type="uniform",
-            # )
-            pred_x = self.ddim_sample(xt, x_cond, eta=0)
+            xt = torch.randn(size=shape, device=self.device)
+            xs, x0_preds = self.ddim_sample(xt, x_cond)
             # 第二个办法
             # pred_x = self.sample_backward(
             #     x_t=x, x_cond=x_cond, simple_var=True, clip_x0=True
             # )
+            pred_x = xs[-1]
             pred_x = inverse_data_transform(pred_x)
             x_cond = inverse_data_transform(x_cond)
-            x_gt = inverse_data_transform(x_gt)
             for i in range(n):
                 per_img_psnr += calculate_psnr(pred_x[i], x_gt[i], test_y_channel=True)
                 per_img_ssim += calculate_ssim(pred_x[i], x_gt[i])
@@ -675,8 +725,13 @@ class DDPM(object):
                 )
         avg_psnr = per_img_psnr / len(test_loader.dataset)
         avg_ssim = per_img_ssim / len(test_loader.dataset)
+        self.logger_val.info(
+            "Average PSNR: {:04f}, Average SSIM: {:04f}".format(
+                avg_psnr, avg_ssim
+            )
+        )
         # self.ema.restore()  # 恢复原始模型参数
-        return avg_psnr, avg_ssim
+        # return avg_psnr, avg_ssim
 
     # 采样融合结果
     @torch.no_grad()
@@ -685,37 +740,28 @@ class DDPM(object):
         type: 路径名
         """
         self.load_ddm_ckpt(self.args.resume, ema=False, train=True)
-        # self.ema.apply_shadow()  # 应用 EMA 影子参数获得平滑后的参数
-        # self.model.eval()
+        self.model.eval()
         image_folder = os.path.join(self.fusion_dir, type)
         os.makedirs(image_folder, exist_ok=True)
         self.logger_val.info(f"Processing test images at step: {self.start_epoch}")
         for _, (x, y) in enumerate(tqdm(fusion_loader)):
             n = x.shape[0]
-            x = data_transform(x)
-            x_cond = x.to(self.device)
+            x_cond = x
+            x_cond = data_transform(x_cond)
             shape = x_cond[:, :3, :, :].shape
-            xt = torch.randn(shape, device=self.device)
-            # xt = xt.to(self.device)
-            # 第一个办法
-            # pred_x = self.sample_image(
-            #     x_cond,
-            #     xt,
-            #     last=True,
-            #     sample_type="generalized",
-            #     skip_type="uniform",
-            # )
+            xt = torch.randn(size=shape, device=self.device)
             # 第二个办法
             # pred_x = self.sample_backward(xt, x_cond, simple_var=True, clip_x0=True)
-            pred_x = self.ddim_sample(xt, x_cond, eta=0)
+            xs, x0_preds = self.ddim_sample(xt, x_cond)
+            pred_x = xs[-1]
             pred_x = inverse_data_transform(pred_x)
             x_cond = inverse_data_transform(x_cond)
 
             for i in range(n):
                 mult_img_dict = {
-                    'ir': x_cond[i, :3, :, :].detach(),
-                    'vi': x_cond[i, 3:, :, :].detach(),
-                    'fusion': pred_x[i].detach(),
+                    'ir': x_cond[i, :3, :, :],
+                    'vi': x_cond[i, 3:, :, :],
+                    'fusion': pred_x[i],
                 }
                 os.makedirs(os.path.join(image_folder, "grid"), exist_ok=True)
                 mult_img_dict_path = os.path.join(os.path.join(image_folder, "grid", y[i]))
@@ -726,9 +772,5 @@ class DDPM(object):
                 save_image(x_cond[:, :3, :, :][i], os.path.join(image_folder, "ir", y[i]))
                 os.makedirs(os.path.join(image_folder, "vi"), exist_ok=True)
                 save_image(x_cond[:, 3:, :, :][i], os.path.join(image_folder, "vi", y[i]))
-        # self.ema.restore()  # 恢复原始模型参数
 
 
-if __name__ == '__main__':
-    path = os.path.join(os.getcwd(), "test")
-    print(path)

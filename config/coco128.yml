@@ -1,10 +1,10 @@
 data:
-  dataset: "CoCo128_noClip"
+  dataset: "CoCo"
   image_size: 128
   channels: 3
   num_workers: 24
   rescaled: true
-  data_dir: "/data2/wait/bisheCode/DDPM_Fusion/dataset/visible128"
+  data_dir: "/data2/wait/bisheCode/DDPM_Fusion/dataset/TXCJ128"
   conditional: True
 
 path:

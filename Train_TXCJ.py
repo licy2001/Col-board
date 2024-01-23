@@ -14,7 +14,7 @@ def parse_args_and_config():
     parser.add_argument(
         "--config",
         type=str,
-        default="/data2/wait/bisheCode/DDPM_Fusion/config/visible.yml",
+        default="/data2/wait/bisheCode/DDPM_Fusion/config/coco128.yml",
         help="Path to the config file",
     )
     # parser.add_argument("--phase", type=str, default="train", help="val(generation)")
@@ -37,12 +37,12 @@ def parse_args_and_config():
         metavar="N",
         help="Seed for initializing training (default: 61)",
     )
-    parser.add_argument("-gpu", "--gpu_ids", type=str, default="0")
+    parser.add_argument("-gpu", "--gpu_ids", type=str, default="1")
     parser.add_argument(
         "--name",
         type=str,
         default="TXCJ",
-        help="folder name to save outputs",
+        help="模型名字",
     )
     parser.add_argument(
         "--concat_type",

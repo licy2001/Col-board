@@ -291,12 +291,7 @@ class DDPM(object):
                         f"step: {self.step}\tloss: {loss.item():.8f}\tdata time: {data_time / (i + 1):.4f}"
                     )
                     loss.backward()
-                    # try:
-                    #     torch.nn.utils.clip_grad_norm_(
-                    #         self.model.parameters(), self.config.optim.grad_clip
-                    #     )
-                    # except Exception:
-                    #     pass
+
                     self.optimizer.step()
 
                     # if self.config.model.ema:
@@ -306,7 +301,7 @@ class DDPM(object):
                     epoch_loss += loss.item()
                     data_start = time.time()
                     # 保存训练过程图片
-                    if self.step % 50 == 0 or self.step == 1:
+                    if self.step % 100 == 0:
                         mult_img_dict = {
                             'cond1': inverse_data_transform(x[0, :3, :, :].detach()),
                             'cond2': inverse_data_transform(x[0, 3:6, :, :].detach()),
@@ -327,7 +322,7 @@ class DDPM(object):
                 loss_table(epochs_losses, os.path.join(self.figure_dir, "loss.xlsx"), y1_label="Epoch", y2_label="Loss")
 
                 ###### per 1 epoch 计算PSNR
-                if epoch % 10 == 0:
+                if epoch % 30 == 0:
                     self.model.eval()
                     print(f"start val sample at epoch: {epoch}")
                     avg_psnr, avg_ssim = self.val_sample(val_loader, epoch)
@@ -361,7 +356,7 @@ class DDPM(object):
                             filename=ckpt_save_path,
                         )
                 # per 100 epoch save model
-                if epoch % 100 == 0:
+                if epoch % 50 == 0:
                     ckpt_save_path = os.path.join(self.checkpoint_dir, self.args.name + "_epoch_" + str(epoch))
                     self.logger.info("Saving models and training states in {}.".format(ckpt_save_path))
                     save_checkpoint(

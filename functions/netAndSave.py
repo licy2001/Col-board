@@ -25,9 +25,9 @@ def save_image_list(image_list, output_path, format='png'):
 
         axes[i].imshow(img, cmap=cmap)
         axes[i].axis('off')
-        axes[i].set_title(f'{i}')
+        axes[i].set_title(i)
 
-    plt.savefig(output_path, format=format)
+    plt.savefig(output_path, format=format, facecolor='white', edgecolor='white', transparent=False)
     plt.clf()
     plt.close("all")
 def save_image_dict(image_dict, output_path, type='png', facecolor='white', edgecolor='white', transparent=False):
@@ -58,7 +58,6 @@ def save_image_dict(image_dict, output_path, type='png', facecolor='white', edge
     plt.savefig(output_path, format=type, facecolor='white', edgecolor='white', transparent=False)
     plt.clf()
     plt.close("all")
-    # plt.show()
 
 # display_and_save_images(mult_img_list, 'mult_img_display.png', format='png')
 # display_and_save_images(mult_img_list, 'mult_img_display.jpg', format='jpg')
@@ -131,4 +130,4 @@ def load_checkpoint(path, device):
     if device is None:
         return torch.load(path, map_location=torch.device("cpu"))
     else:
-        return torch.load(path, map_location=torch.device("cpu"))
+        return torch.load(path, map_location=device)

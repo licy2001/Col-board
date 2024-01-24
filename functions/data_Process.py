@@ -6,5 +6,4 @@ def data_transform(x):
 
 
 def inverse_data_transform(x):
-    # x = torch.clamp(x, -1, 1)
     return torch.clamp((x + 1.0) / 2.0, 0.0, 1.0)

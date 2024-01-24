@@ -49,4 +49,3 @@ optim:
   amsgrad: False
   eps: 0.00000001
   beta1: 0.9
-  grad_clip: 5.0 # (1.0-5.0)

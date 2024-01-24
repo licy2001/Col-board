@@ -7,11 +7,9 @@ import time
 import numpy as np
 from tqdm import tqdm
 import torch
-import torch.nn as nn
 import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
 from models.unet import UNet
-from models.ema import EMAHelper
 from functions.netAndSave import (
     load_checkpoint,
     save_image,
@@ -24,7 +22,6 @@ from functions.netAndSave import (
     save_image_list
 )
 from functions.get_Optimizer import get_optimizer
-from functions.losses import noise_estimation_loss
 from functions.data_Process import data_transform, inverse_data_transform
 from functions.metrics import calculate_psnr, calculate_ssim
 

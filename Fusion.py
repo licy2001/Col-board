@@ -36,7 +36,7 @@ def parse_args_and_config():
         help="10 Number of implicit sampling steps",
     )
 
-    parser.add_argument("-gpu", "--gpu_ids", type=str, default="0")
+    parser.add_argument("-gpu", "--gpu_ids", type=str, default="2")
     parser.add_argument(
         "--seed",
         default=61,  # 61

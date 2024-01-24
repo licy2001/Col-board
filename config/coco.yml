@@ -1,6 +1,6 @@
 data:
-  dataset: "CoCo"
-  image_size: 256
+  dataset: "CoCoBlack"
+  image_size: 128
   channels: 3
   num_workers: 24
   rescaled: true
@@ -23,9 +23,8 @@ model:
   ch: 128
   ch_mult: [ 1, 2, 3, 4 ]
   num_res_blocks: 2
-  attn_resolutions: [ 32 ] # 16
+  attn_resolutions: [ 16 ] # 16
   dropout: 0.0
-  ema_rate: 0.995
   ema: True
   resamp_with_conv: True
 
@@ -36,13 +35,12 @@ diffusion:
   num_diffusion_timesteps: 1000
 
 training:
-  batch_size: 4
+  batch_size: 20
   n_epochs: 10000
   epoch_freq: 100
 
 sampling:
-  batch_size: 2
-  last_only: True
+  batch_size: 10
 
 optim:
   weight_decay: 0.000

@@ -4,7 +4,7 @@ import os
 import yaml
 import torch
 import numpy as np
-from models.ddpm import DDPM
+from models.ddpm2 import DDPM
 from functions.get_Dataset import Restruction
 
 def parse_args_and_config():
@@ -14,19 +14,20 @@ def parse_args_and_config():
     parser.add_argument(
         "--config",
         type=str,
-        default="/data2/wait/bisheCode/DDPM_Fusion/config/test.yml",
+        default="/data2/wait/bisheCode/DDPM_Fusion/config/coco.yml",
         help="Path to the config file",
     )
+    # parser.add_argument("--phase", type=str, default="train", help="val(generation)")
     parser.add_argument(
         "--resume",
-        default="/data2/wait/bisheCode/DDPM_Fusion/results/CoCo128/checkpoint/TXCJ_epoch_100.pth",
+        default="",
         type=str,
         help="Path for checkpoint to load and resume",
     )
     parser.add_argument(
         "--timesteps",
         type=int,
-        default=25,
+        default=20,
         help="Number of implicit sampling steps for validation image",
     )
     parser.add_argument(
@@ -36,11 +37,17 @@ def parse_args_and_config():
         metavar="N",
         help="Seed for initializing training (default: 61)",
     )
-    parser.add_argument("-gpu", "--gpu_ids", type=str, default="0")
+    parser.add_argument("-gpu", "--gpu_ids", type=str, default="1")
+    parser.add_argument(
+        "--name",
+        type=str,
+        default="TXCJ",
+        help="模型名字",
+    )
     parser.add_argument(
         "--concat_type",
         type=str,
-        default="AXB",
+        default="ABX",
         help="the concat type of condition Image",
     )
     args = parser.parse_args()
@@ -85,7 +92,7 @@ def main():
     # create model
     print("=> creating denoising-diffusion model...")
     diffusion = DDPM(args, config)
-    diffusion.test_sample(DATASET, type="coco128")
+    diffusion.train(DATASET)
 
 
 if __name__ == "__main__":

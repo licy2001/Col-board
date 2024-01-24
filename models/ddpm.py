@@ -11,7 +11,7 @@ import torch.nn as nn
 import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
 from models.unet import UNet
-from models.ema import EMAHelper
+# from models.ema import EMAHelper
 from functions.netAndSave import (
     load_checkpoint,
     save_image,
@@ -24,11 +24,72 @@ from functions.netAndSave import (
     save_image_list
 )
 from functions.get_Optimizer import get_optimizer
-from functions.losses import noise_estimation_loss
 from functions.data_Process import data_transform, inverse_data_transform
 from functions.metrics import calculate_psnr, calculate_ssim
 
 
+class EMAHelper(object):
+    def __init__(self, mu=0.9999):
+        self.mu = mu
+        self.shadow = {}
+
+    def register(self, module):
+        if isinstance(module, nn.DataParallel):
+            module = module.module
+        for name, param in module.named_parameters():
+            if param.requires_grad:
+                self.shadow[name] = param.data.clone()
+
+    def update(self, module):
+        """
+        更新方法，用于在训练过程中更新模型参数的滑动平均版本。
+        """
+        if isinstance(module, nn.DataParallel):
+            module = module.module
+        for name, param in module.named_parameters():
+            if param.requires_grad:
+                self.shadow[name].data = (1.0 - self.mu) * param.data.to(
+                    self.shadow[name].device
+                ) + self.mu * self.shadow[name].data
+
+    def ema(self, module):
+        """
+        EMA 方法，用于将模型参数设置为其滑动平均版本。
+        """
+        if isinstance(module, nn.DataParallel):
+            module = module.module
+        for name, param in module.named_parameters():
+            if param.requires_grad:
+                param.data.copy_(self.shadow[name].data)
+
+    def ema_copy(self, module):
+        """
+        创建一个指数移动平均（Exponential Moving Average，EMA）版本的神经网络模型的副本
+        """
+        if isinstance(module, nn.DataParallel):
+            inner_module = module.module
+            module_copy = type(inner_module)(inner_module.config).to(
+                inner_module.config.device
+            )
+            module_copy.load_state_dict(inner_module.state_dict())
+            module_copy = nn.DataParallel(module_copy)
+        else:
+            module_copy = type(module)(module.config).to(module.config.device)
+            module_copy.load_state_dict(module.state_dict())
+        self.ema(module_copy)
+        return module_copy
+
+    def state_dict(self):
+        """
+        返回当前滑动平均版本的状态字典。
+        """
+        return self.shadow
+
+    def load_state_dict(self, state_dict):
+        """
+        从给定的状态字典加载滑动平均版本
+        """
+        self.shadow = state_dict
 
 def get_beta_schedule(beta_schedule, *, beta_start, beta_end, num_diffusion_timesteps):
     def sigmoid(x):
@@ -200,16 +261,18 @@ class DDPM(object):
         x0_coef1 = self.get_value_t(self.sqrt_recip_alphas_bar, t)
         x0_coef2 = self.get_value_t(self.sqrt_one_minus_alphas_bar, t)
         pred_x0 = x0_coef1 * (xt - x0_coef2 * eps_theta)
+
         loss_fn = torch.nn.MSELoss(reduction="mean")
-        # loss_fn = torch.nn.MSELoss(size_average=True, reduce=True, reduction="sum")
-        loss = loss_fn(eps_theta, eps) * self.config.training.batch_size
+        eps_loss = loss_fn(eps_theta, eps)  * self.config.training.batch_size
+        img_loss = loss_fn(x0, pred_x0)  * self.config.training.batch_size
+        loss = eps_loss + 0.6 * img_loss
         return loss, xt, eps, eps_theta, pred_x0
 
     def train(self, DATASET):
         cudnn.benchmark = True
         train_loader, val_loader = DATASET.get_loaders()
         if os.path.isfile(self.args.resume):
-            self.load_ddm_ckpt(self.args.resume, ema=False, train=True)
+            self.load_ddm_ckpt(self.args.resume, ema=True, train=True)
 
         best_psnr = 0
         epochs_losses = self.epochs_loss
@@ -230,14 +293,12 @@ class DDPM(object):
                     # n = current_batch_size
                     data_time += time.time() - data_start
                     self.model.train()
-                    x = x.to(self.device)
                     x = data_transform(x)
+                    x = x.to(self.device)
                     # antithetic sampling
                     x0 = x[:, 6:, :, :]
                     x_cond = x[:, :6, :, :]
-                    # loss, x_t, pred_noise, pred_x0 = noise_estimation_loss(
-                    #     self.model, x0, x_cond, t, e, b
-                    # )
+
                     self.optimizer.zero_grad()
                     loss, x_t, eps, pred_noise, pred_x0 = self.get_loss(x0=x0, x_cond=x_cond)
                     self.logger.info(
@@ -254,7 +315,7 @@ class DDPM(object):
                     epoch_loss += loss.item()
                     data_start = time.time()
                     # 保存训练过程图片
-                    if self.step % 100 == 0:
+                    if self.step % 50 == 0:
                         mult_img_dict = {
                             'cond1': inverse_data_transform(x[0, :3, :, :].detach()),
                             'cond2': inverse_data_transform(x[0, 3:6, :, :].detach()),
@@ -309,7 +370,7 @@ class DDPM(object):
                             filename=ckpt_save_path,
                         )
                 # per 100 epoch save model
-                if epoch % 50 == 0:
+                if epoch % 100 == 0:
                     ckpt_save_path = os.path.join(self.checkpoint_dir, self.args.name + "_epoch_" + str(epoch))
                     self.logger.info("Saving models and training states in {}.".format(ckpt_save_path))
                     save_checkpoint(
@@ -333,7 +394,7 @@ class DDPM(object):
                 )
         # except Exception as e:
         except KeyboardInterrupt:
-            # self.logger.info(f"Training was interrupted. Exception: {e}")
+            self.logger.info(f"Training was interrupted.")
             # 保存当前epoch时刻的模型
             ckpt_save_path = os.path.join(self.checkpoint_dir, self.args.name + "_interrupt_epoch_" + str(epoch))
             self.logger.info("Saving models and training states in {}.".format(ckpt_save_path))
@@ -352,7 +413,6 @@ class DDPM(object):
                 },
                 filename=ckpt_save_path,
             )
-            # raise e  # 重新抛出异常
 
     ###### 第一种采样
     # q(xt|x0)
@@ -455,51 +515,16 @@ class DDPM(object):
             alpha_prev = self.get_value_t(self.alphas_bar, p_t)
             xt = xs[-1].to(self.device)
             model_input = self.get_model_input(x_cond, xt)
-            model_input = torch.clamp(model_input, -1, 1)
+            # model_input = torch.clamp(model_input, -1, 1)
             eps_theta = self.model(model_input, t.float())  # 这个不能加以范围限制
             # Calculation formula
             x0_t = (xt - (eps_theta * torch.sqrt(1 - alpha_t))) / torch.sqrt(alpha_t)
-            ######
-            x0_t = torch.clamp(x0_t, -1, 1)
+            # x0_t = torch.clamp(x0_t, -1, 1)
             x0_preds.append(x0_t.to('cpu'))
             c1 = eta * torch.sqrt((1 - alpha_t / alpha_prev) * (1 - alpha_prev) / (1 - alpha_t))
             c2 = torch.sqrt((1 - alpha_prev) - c1 ** 2)
             xt_prev = torch.sqrt(alpha_prev) * x0_t + c2 * eps_theta + c1 * noise
-            # xt_prev = torch.clamp(xt_prev, -1, 1)
             xs.append(xt_prev.to('cpu'))
-        return xs, x0_preds
-
-    @torch.no_grad()
-    def ddpm_steps(self, xt, x_cond):
-        skip = (
-                self.config.diffusion.num_diffusion_timesteps
-                // self.args.timesteps
-        )
-        seq = range(0, self.config.diffusion.num_diffusion_timesteps, skip)
-        n = xt.size(0)
-        seq_next = [-1] + list(seq[:-1])
-        xs = [xt]
-        x0_preds = []
-        for i, j in zip(reversed(seq), reversed(seq_next)):
-            t = (torch.ones(n) * i).to(xt.device)
-            next_t = (torch.ones(n) * j).to(xt.device)
-            at = self.get_value_t(self.alphas_bar, t)
-            atm1 = self.get_value_t(self.alphas_bar, next_t)
-            beta_t = 1 - at / atm1
-            xt = xs[-1].to("cuda")
-            model_input = self.get_model_input(x_cond, xt)
-            et = self.model(model_input, t.float())
-
-            x_0 = (xt - et * torch.sqrt(1 - at)) / torch.sqrt(at)
-            x0_preds.append(x_0.to("cpu"))
-            mean_eps = ((torch.sqrt(atm1) * beta_t) * x_0 + (torch.sqrt(1 - beta_t) * (1 - atm1)) * xt) / (1.0 - at)
-
-            noise = torch.randn_like(xt)
-            mask = 1 - (t == 0).float()
-            mask = mask.view(-1, 1, 1, 1)
-            logvar = torch.log(beta_t)
-            sample = mean_eps + mask * torch.exp(0.5 * logvar) * noise
-            xs.append(sample.to("cpu"))
         return xs, x0_preds
 
     def visualize_forward(self, val_loader):

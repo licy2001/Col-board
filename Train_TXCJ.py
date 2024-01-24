@@ -14,10 +14,9 @@ def parse_args_and_config():
     parser.add_argument(
         "--config",
         type=str,
-        default="/data2/wait/bisheCode/DDPM_Fusion/config/coco128.yml",
+        default="/data2/wait/bisheCode/DDPM_Fusion/config/coco.yml",
         help="Path to the config file",
     )
-    # parser.add_argument("--phase", type=str, default="train", help="val(generation)")
     parser.add_argument(
         "--resume",
         default="",
@@ -37,7 +36,7 @@ def parse_args_and_config():
         metavar="N",
         help="Seed for initializing training (default: 61)",
     )
-    parser.add_argument("-gpu", "--gpu_ids", type=str, default="1")
+    parser.add_argument("-gpu", "--gpu_ids", type=str, default="0")
     parser.add_argument(
         "--name",
         type=str,
@@ -73,7 +72,6 @@ def main():
     args, config = parse_args_and_config()
     # setup device to run
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_ids
-    # device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Using device: {}".format(device))
     config.device = device

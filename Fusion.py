@@ -99,7 +99,7 @@ def main():
     # create model
     print("=> creating denoising-diffusion model with wrapper...")
     diffusion = DDPM(args, config)
-    diffusion.Fusion_sample(dataloader, type="LLVIP_coco_clip_net_x0_eps_optim")
+    diffusion.Fusion_sample(dataloader, type="LLVIP_coco_clip_net_x0_xt_optim")
 
 
 if __name__ == "__main__":

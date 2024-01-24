@@ -10,9 +10,8 @@ import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
-from torchvision.transforms import ToPILImage
 from models.unet import UNet
-from models.ema import EMA
+from models.ema import EMAHelper
 from functions.netAndSave import (
     load_checkpoint,
     save_image,
@@ -29,54 +28,6 @@ from functions.losses import noise_estimation_loss
 from functions.data_Process import data_transform, inverse_data_transform
 from functions.metrics import calculate_psnr, calculate_ssim
 
-
-class EMAHelper(object):
-    def __init__(self, mu=0.9999):
-        self.mu = mu
-        self.shadow = {}
-
-    def register(self, module):
-        if isinstance(module, nn.DataParallel):
-            module = module.module
-        for name, param in module.named_parameters():
-            if param.requires_grad:
-                self.shadow[name] = param.data.clone()
-
-    def update(self, module):
-        if isinstance(module, nn.DataParallel):
-            module = module.module
-        for name, param in module.named_parameters():
-            if param.requires_grad:
-                self.shadow[name].data = (1.0 - self.mu) * param.data.to(
-                    self.shadow[name].device
-                ) + self.mu * self.shadow[name].data
-
-    def ema(self, module):
-        if isinstance(module, nn.DataParallel):
-            module = module.module
-        for name, param in module.named_parameters():
-            if param.requires_grad:
-                param.data.copy_(self.shadow[name].data)
-
-    def ema_copy(self, module):
-        if isinstance(module, nn.DataParallel):
-            inner_module = module.module
-            module_copy = type(inner_module)(inner_module.config).to(
-                inner_module.config.device
-            )
-            module_copy.load_state_dict(inner_module.state_dict())
-            module_copy = nn.DataParallel(module_copy)
-        else:
-            module_copy = type(module)(module.config).to(module.config.device)
-            module_copy.load_state_dict(module.state_dict())
-        self.ema(module_copy)
-        return module_copy
-
-    def state_dict(self):
-        return self.shadow
-
-    def load_state_dict(self, state_dict):
-        self.shadow = state_dict
 
 
 def get_beta_schedule(beta_schedule, *, beta_start, beta_end, num_diffusion_timesteps):
@@ -204,6 +155,7 @@ class DDPM(object):
         self.logger = logging.getLogger("base")
         self.logger_val = logging.getLogger("val")
         self.logger_fusion = logging.getLogger("fusion")
+
     # 生成时间步
     def sample_timestep(self, n, symmetric=True, big_range=True):
         if symmetric:
@@ -505,7 +457,6 @@ class DDPM(object):
             model_input = self.get_model_input(x_cond, xt)
             model_input = torch.clamp(model_input, -1, 1)
             eps_theta = self.model(model_input, t.float())  # 这个不能加以范围限制
-            eps_theta = torch.clamp(eps_theta, -1, 1)
             # Calculation formula
             x0_t = (xt - (eps_theta * torch.sqrt(1 - alpha_t))) / torch.sqrt(alpha_t)
             ######
@@ -514,6 +465,7 @@ class DDPM(object):
             c1 = eta * torch.sqrt((1 - alpha_t / alpha_prev) * (1 - alpha_prev) / (1 - alpha_t))
             c2 = torch.sqrt((1 - alpha_prev) - c1 ** 2)
             xt_prev = torch.sqrt(alpha_prev) * x0_t + c2 * eps_theta + c1 * noise
+            # xt_prev = torch.clamp(xt_prev, -1, 1)
             xs.append(xt_prev.to('cpu'))
         return xs, x0_preds
 
@@ -614,7 +566,7 @@ class DDPM(object):
                                  'cond2': x_cond[i, 3:, :, :],
                                  'gt': x_gt[i],
                                  'pred': pred_x[i]
-                }
+                                 }
                 mult_img_dict_path = os.path.join(os.path.join(image_folder, y[i]))
                 save_image_dict(mult_img_dict, mult_img_dict_path)
 
@@ -725,5 +677,3 @@ class DDPM(object):
                 save_image(x_cond[:, :3, :, :][i], os.path.join(image_folder, "ir", y[i]))
                 os.makedirs(os.path.join(image_folder, "vi"), exist_ok=True)
                 save_image(x_cond[:, 3:, :, :][i], os.path.join(image_folder, "vi", y[i]))
-
-

@@ -65,3 +65,16 @@ def calculate_ssim(img1, img2):
     # 计算 SSIM
     ssim_value = ssim(img1, img2, data_range=1.0, size_average=True)  # data_range取决于图像的范围，如果是[0,1]则为1.0，如果是[0,255]则为255.0
     return ssim_value.item()
+
+
+if __name__ == '__main__':
+    import PIL.Image as Image
+    from torchvision.transforms import ToTensor
+    img1 = Image.open("/data2/wait/bisheCode/DDPM_Fusion/results/CoCo/Fusion/LLVIP_coco_clip_net_x0_xt_optim/pred/010001.jpg")
+    img2 = Image.open("/data2/wait/bisheCode/DDPM_Fusion/results/CoCo/Fusion/LLVIP_coco_clip_net_x0_optim/pred/010001.jpg")
+
+    img1 = ToTensor()(img1)
+    img2 = ToTensor()(img2)
+
+    psnr = calculate_psnr(img1, img2, test_y_channel=True)
+    print(f"psnr: {psnr}")

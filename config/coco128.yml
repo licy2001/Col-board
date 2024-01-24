@@ -1,5 +1,5 @@
 data:
-  dataset: "CoCoBlack"
+  dataset: "CoCoBlack_mult_ch"
   image_size: 128
   channels: 3
   num_workers: 24
@@ -21,9 +21,9 @@ model:
   in_channels: 9
   out_ch: 3
   ch: 128
-  ch_mult: [ 1, 2, 2, 3, 4 ]
+  ch_mult: [ 1, 2, 2, 4, 4 ]
   num_res_blocks: 2
-  attn_resolutions: [ 16 ] # 16
+  attn_resolutions: [ 64, 32 ] # 16
   dropout: 0.0
   ema: True
   resamp_with_conv: True

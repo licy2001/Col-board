@@ -200,9 +200,10 @@ class DDPM(object):
 
         setup_logger(None, self.log_dir, "train", level=logging.INFO, screen=True)
         setup_logger("val", self.log_dir, "val", level=logging.INFO)
+        setup_logger("fusion", self.log_dir, "fusion", level=logging.INFO)
         self.logger = logging.getLogger("base")
         self.logger_val = logging.getLogger("val")
-
+        self.logger_fusion = logging.getLogger("fusion")
     # 生成时间步
     def sample_timestep(self, n, symmetric=True, big_range=True):
         if symmetric:
@@ -502,11 +503,13 @@ class DDPM(object):
             alpha_prev = self.get_value_t(self.alphas_bar, p_t)
             xt = xs[-1].to(self.device)
             model_input = self.get_model_input(x_cond, xt)
-            eps_theta = self.model(model_input, t.float())
+            model_input = torch.clamp(model_input, -1, 1)
+            eps_theta = self.model(model_input, t.float())  # 这个不能加以范围限制
+            eps_theta = torch.clamp(eps_theta, -1, 1)
             # Calculation formula
             x0_t = (xt - (eps_theta * torch.sqrt(1 - alpha_t))) / torch.sqrt(alpha_t)
             ######
-            # x0_t = torch.clamp(x0_t, -1, 1)
+            x0_t = torch.clamp(x0_t, -1, 1)
             x0_preds.append(x0_t.to('cpu'))
             c1 = eta * torch.sqrt((1 - alpha_t / alpha_prev) * (1 - alpha_prev) / (1 - alpha_t))
             c2 = torch.sqrt((1 - alpha_prev) - c1 ** 2)
@@ -515,32 +518,36 @@ class DDPM(object):
         return xs, x0_preds
 
     @torch.no_grad()
-    def ddpm_steps(self, xt, x_cond, seq):
-        with torch.no_grad():
-            n = xt.size(0)
-            seq_next = [-1] + list(seq[:-1])
-            xs = [xt]
-            x0_preds = []
-            for i, j in zip(reversed(seq), reversed(seq_next)):
-                t = (torch.ones(n) * i).to(xt.device)
-                next_t = (torch.ones(n) * j).to(xt.device)
-                at = self.get_value_t(self.alphas_bar, t)
-                atm1 = self.get_value_t(self.alphas_bar, next_t)
-                beta_t = 1 - at / atm1
-                xt = xs[-1].to("cuda:1")
-                model_input = self.get_model_input(x_cond, xt)
-                et = self.model(model_input, t.float())
+    def ddpm_steps(self, xt, x_cond):
+        skip = (
+                self.config.diffusion.num_diffusion_timesteps
+                // self.args.timesteps
+        )
+        seq = range(0, self.config.diffusion.num_diffusion_timesteps, skip)
+        n = xt.size(0)
+        seq_next = [-1] + list(seq[:-1])
+        xs = [xt]
+        x0_preds = []
+        for i, j in zip(reversed(seq), reversed(seq_next)):
+            t = (torch.ones(n) * i).to(xt.device)
+            next_t = (torch.ones(n) * j).to(xt.device)
+            at = self.get_value_t(self.alphas_bar, t)
+            atm1 = self.get_value_t(self.alphas_bar, next_t)
+            beta_t = 1 - at / atm1
+            xt = xs[-1].to("cuda")
+            model_input = self.get_model_input(x_cond, xt)
+            et = self.model(model_input, t.float())
 
-                x_0 = (xt - et * torch.sqrt(1 - at)) / torch.sqrt(at)
-                x0_preds.append(x_0.to("cpu"))
-                mean_eps = ((torch.sqrt(atm1) * beta_t) * x_0 + (torch.sqrt(1 - beta_t) * (1 - atm1)) * xt) / (1.0 - at)
+            x_0 = (xt - et * torch.sqrt(1 - at)) / torch.sqrt(at)
+            x0_preds.append(x_0.to("cpu"))
+            mean_eps = ((torch.sqrt(atm1) * beta_t) * x_0 + (torch.sqrt(1 - beta_t) * (1 - atm1)) * xt) / (1.0 - at)
 
-                noise = torch.randn_like(xt)
-                mask = 1 - (t == 0).float()
-                mask = mask.view(-1, 1, 1, 1)
-                logvar = torch.log(beta_t)
-                sample = mean_eps + mask * torch.exp(0.5 * logvar) * noise
-                xs.append(sample.to("cpu"))
+            noise = torch.randn_like(xt)
+            mask = 1 - (t == 0).float()
+            mask = mask.view(-1, 1, 1, 1)
+            logvar = torch.log(beta_t)
+            sample = mean_eps + mask * torch.exp(0.5 * logvar) * noise
+            xs.append(sample.to("cpu"))
         return xs, x0_preds
 
     def visualize_forward(self, val_loader):
@@ -689,10 +696,10 @@ class DDPM(object):
         self.model.eval()
         image_folder = os.path.join(self.fusion_dir, type)
         os.makedirs(image_folder, exist_ok=True)
-        self.logger_val.info(f"Processing test images at step: {self.start_epoch}")
+        self.logger_fusion.info(f"Processing test images at epoch: {self.start_epoch}")
         for _, (x, y) in enumerate(tqdm(fusion_loader)):
             n = x.shape[0]
-            x_cond = x
+            x_cond = x.to(self.device)
             x_cond = data_transform(x_cond)
             shape = x_cond[:, :3, :, :].shape
             xt = torch.randn(size=shape, device=self.device)

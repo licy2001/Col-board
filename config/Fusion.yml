@@ -1,5 +1,5 @@
 data:
-  dataset: "CoCo128"
+  dataset: "CoCo"
   image_size: 128
   channels: 3
   num_workers: 24
@@ -23,10 +23,9 @@ model:
   ch: 128
   ch_mult: [ 1, 2, 3, 4 ]
   num_res_blocks: 2
-  attn_resolutions: [ 32 ] # 16
+  attn_resolutions: [ 16 ] # 16
   dropout: 0.0
-  ema_rate: 0.995 # 0.999
-  ema: False
+  ema: True
   resamp_with_conv: True
 
 diffusion:
@@ -42,7 +41,6 @@ training:
 
 sampling:
   batch_size: 10
-  last_only: True
 
 testing:
   batch_size: 10

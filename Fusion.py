@@ -6,6 +6,7 @@ import numpy as np
 from functions.get_Dataset import Fusion
 from models.ddpm import DDPM
 
+
 def parse_args_and_config():
     parser = argparse.ArgumentParser(
         description="Restoring Weather with Patch-Based Denoising Diffusion Models"
@@ -18,27 +19,27 @@ def parse_args_and_config():
     )
     parser.add_argument(
         "--resume",
-        default="/data2/wait/bisheCode/DDPM_Fusion/results/CoCo128/checkpoint/TXCJ_epoch_1700.pth",
+        default="/data2/wait/bisheCode/DDPM_Fusion/results/CoCo/checkpoint/TXCJ_best.pth",
         type=str,
         help="Path for the diffusion model checkpoint to load for evaluation",
     )
     parser.add_argument(
         "--data",
-        default="/data2/wait/bisheCode/DDPM_Fusion/dataset/TNO",
+        default="/data2/wait/bisheCode/DDPM_Fusion/dataset/LLVIP",
         type=str,
         help="Path for the fusion data",
     )
     parser.add_argument(
         "--timesteps",
         type=int,
-        default=25,
+        default=20,
         help="10 Number of implicit sampling steps",
     )
 
-    parser.add_argument("-gpu", "--gpu_ids", type=str, default="2")
+    parser.add_argument("-gpu", "--gpu_ids", type=str, default="0")
     parser.add_argument(
         "--seed",
-        default=61,
+        default=61,  # 61
         type=int,
         metavar="N",
         help="Seed for initializing training (default: 61)",
@@ -46,7 +47,7 @@ def parse_args_and_config():
     parser.add_argument(
         "--concat_type",
         type=str,
-        default="AXB",
+        default="ABX",
         help="the concat type of condition Image",
     )
     args = parser.parse_args()
@@ -66,6 +67,7 @@ def dict2namespace(config):
             new_value = value
         setattr(namespace, key, new_value)
     return namespace
+
 
 def main():
     args, config = parse_args_and_config()
@@ -97,8 +99,7 @@ def main():
     # create model
     print("=> creating denoising-diffusion model with wrapper...")
     diffusion = DDPM(args, config)
-    # diffusion.sample_validation(val_loader)
-    diffusion.Fusion_sample(dataloader, type="TNO")
+    diffusion.Fusion_sample(dataloader, type="LLVIP_coco_clip_net_x0_eps_optim")
 
 
 if __name__ == "__main__":

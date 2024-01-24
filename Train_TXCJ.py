@@ -42,7 +42,7 @@ def parse_args_and_config():
         "--name",
         type=str,
         default="TXCJ",
-        help="模型名字",
+        help="model name",
     )
     parser.add_argument(
         "--concat_type",
@@ -73,7 +73,6 @@ def main():
     args, config = parse_args_and_config()
     # setup device to run
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_ids
-    # device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Using device: {}".format(device))
     config.device = device

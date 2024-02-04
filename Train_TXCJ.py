@@ -7,7 +7,7 @@ import numpy as np
 from models.ddpm import DDPM
 from functions.get_Dataset import Restruction
 
-
+#
 def parse_args_and_config():
     parser = argparse.ArgumentParser(
         description="Training Denoising Diffusion Models  For TXCJ"

@@ -21,6 +21,7 @@ from functions.netAndSave import (
     save_image_dict,
     save_image_list
 )
+from functions import sampling
 from functions.get_Optimizer import get_optimizer
 from functions.data_Process import data_transform, inverse_data_transform
 from functions.metrics import calculate_psnr, calculate_ssim
@@ -596,61 +597,6 @@ class DDPM(object):
         avg_ssim = per_img_ssim / len(val_loader.dataset)
         return avg_psnr, avg_ssim
 
-    # 对测试集进行采样
-    @torch.no_grad()
-    def test_sample(self, DATASET, type):
-        """
-        type: 路径名
-        """
-        test_loader = DATASET.get_test_loaders()
-        self.load_ddm_ckpt(self.args.resume, ema=False, train=True)
-        self.model.eval()
-        image_folder = self.test_sample_dir
-        self.logger_val.info(f"Processing test images at step: {self.start_epoch}")
-        per_img_psnr = 0.0
-        per_img_ssim = 0.0
-        for _, (x, y) in enumerate(tqdm(test_loader)):
-            n = x.shape[0]
-            x_cond = x[:, :6, :, :].to(self.device)
-            x_gt = x[:, 6:, ::]
-            x_cond = data_transform(x_cond)
-            shape = x_gt.shape
-            xt = torch.randn(size=shape, device=self.device)
-            xs, x0_preds = self.ddim_sample(xt, x_cond)
-            # 第二个办法
-            # pred_x = self.sample_backward(
-            #     x_t=x, x_cond=x_cond, simple_var=True, clip_x0=True
-            # )
-            pred_x = xs[-1]
-            pred_x = inverse_data_transform(pred_x)
-            x_cond = inverse_data_transform(x_cond)
-            for i in range(n):
-                per_img_psnr += calculate_psnr(pred_x[i], x_gt[i], test_y_channel=True)
-                per_img_ssim += calculate_ssim(pred_x[i], x_gt[i])
-                mult_img_dict = {
-                    'cond1': x_cond[i, :3, :, :],
-                    'cond2': x_cond[i, 3:, :, :],
-                    'gt': x_gt[i],
-                    'pred': pred_x[i],
-                }
-                os.makedirs(os.path.join(image_folder, type, "grid"), exist_ok=True)
-                mult_img_dict_path = os.path.join(os.path.join(image_folder, type, "grid", y[i]))
-                save_image_dict(mult_img_dict, mult_img_dict_path)
-
-                os.makedirs(os.path.join(image_folder, type, "pred"), exist_ok=True)
-                save_image(pred_x[i], os.path.join(image_folder, type, "pred", y[i]))
-                os.makedirs(os.path.join(image_folder, type, "cond1"), exist_ok=True)
-                save_image(x_cond[:, :3, :, :][i], os.path.join(image_folder, type, "cond1", y[i]))
-                os.makedirs(os.path.join(image_folder, type, "cond2"), exist_ok=True)
-                save_image(x_cond[:, 3:, :, :][i], os.path.join(image_folder, type, "cond2", y[i]), )
-        avg_psnr = per_img_psnr / len(test_loader.dataset)
-        avg_ssim = per_img_ssim / len(test_loader.dataset)
-        self.logger_val.info(
-            "Average PSNR: {:04f}, Average SSIM: {:04f}".format(
-                avg_psnr, avg_ssim
-            )
-        )
-
     # 采样融合结果
     @torch.no_grad()
     def Fusion_sample(self, fusion_loader, type):
@@ -690,3 +636,17 @@ class DDPM(object):
                 save_image(x_cond[:, :3, :, :][i], os.path.join(image_folder, "ir", y[i]))
                 os.makedirs(os.path.join(image_folder, "vi"), exist_ok=True)
                 save_image(x_cond[:, 3:, :, :][i], os.path.join(image_folder, "vi", y[i]))
+
+    def sample_image(self, x_cond, x, last=True):
+        skip = (
+            self.config.diffusion.num_diffusion_timesteps
+            // self.args.sampling_timesteps
+        )
+        seq = range(0, self.config.diffusion.num_diffusion_timesteps, skip)
+
+        xs = sampling.generalized_steps(
+            x, x_cond, seq, self.model, self.betas, eta=0.0
+        )
+        if last:
+            xs = xs[0][-1]
+        return xs

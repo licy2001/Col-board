@@ -1,7 +1,5 @@
 import torch
 
-from data_Process import data_transform, inverse_data_transform
-
 
 def compute_alpha(beta, t):
     beta = torch.cat([torch.zeros(1).to(beta.device), beta], dim=0)

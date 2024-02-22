@@ -1,8 +1,5 @@
 import os
-from os import listdir
-from os.path import isfile
 import torch
-import numpy as np
 import torchvision
 import torch.utils.data
 from PIL import Image
@@ -170,7 +167,6 @@ class FusionDataset(torch.utils.data.Dataset):
             if item.endswith(".jpg") or item.endswith(".png") or item.endswith(".bmp"):
                 ir_names.append(os.path.join(ir_path, item))
                 vi_names.append(os.path.join(vi_path, item))
-        # print("The number of the training dataset is: {}".format(len(gt_names)))
 
         self.ir_names = ir_names
         self.vi_names = vi_names

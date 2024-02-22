@@ -14,7 +14,7 @@ def parse_args_and_config():
     parser.add_argument(
         "--config",
         type=str,
-        default="/data2/wait/bisheCode/DDPM_Fusion/config/coco.yml",
+        default="/data2/wait/bisheCode/DDPM_Fusion/config/TXCJ64.yml",
         help="Path to the config file",
     )
     parser.add_argument(

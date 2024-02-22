@@ -15,6 +15,9 @@ dataset/
 experiments/
 /Fusion
 /results
+/results/checkpoint
+/results/train_process
+/results/val_sample
 
 # Distribution / packaging
 .Python

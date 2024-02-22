@@ -1,7 +1,6 @@
 # -*- coding:utf-8 -*-
 import os, sys
-
-sys.path.append("/data2/wait/bisheCode/DDPM_Fusion")
+sys.path.append("/data2/wait/bisheCode/Fusion")
 import logging
 import time
 import numpy as np
@@ -263,7 +262,7 @@ class DDPM(object):
         loss_fn = torch.nn.MSELoss(reduction="mean")
         eps_loss = loss_fn(eps_theta, eps) * self.config.training.batch_size
         img_loss = loss_fn(pred_x0, x0) * self.config.training.batch_size
-        loss = eps_loss + 0.6 * img_loss
+        loss = eps_loss + 0.3 * img_loss
         return loss, xt, eps, eps_theta, pred_x0
 
     def train(self, DATASET):
@@ -286,7 +285,6 @@ class DDPM(object):
                 epoch_start_time = time.time()
                 # 开启梯度更新
                 for i, (x, y) in enumerate(tqdm(train_loader)):
-
                     self.step += 1
                     # n = current_batch_size
                     data_time += time.time() - data_start
@@ -309,7 +307,6 @@ class DDPM(object):
                     # if self.config.model.ema:
                     self.ema.update(self.model)
 
-                    # epoch_loss += loss.item() * current_batch_size
                     epoch_loss += loss.item()
                     data_start = time.time()
                     # 保存训练过程图片
@@ -505,6 +502,7 @@ class DDPM(object):
             else:
                 noise = torch.zeros_like(xt)
             # Time step, creating a tensor of size n
+            noise = torch.clamp(noise, -1, 1) # 限制噪声
             t = (torch.ones(n) * i).to(self.device)
             # Previous time step, creating a tensor of size n
             p_t = (torch.ones(n) * p_i).to(self.device)
@@ -512,13 +510,13 @@ class DDPM(object):
             alpha_t = self.get_value_t(self.alphas_bar, t)
             alpha_prev = self.get_value_t(self.alphas_bar, p_t)
             xt = xs[-1].to(self.device)
-            model_input = self.get_model_input(x_cond, xt)
-            # model_input = torch.clamp(model_input, -1, 1)
+            model_input = self.get_model_input(x_cond, xt) # 限制模型输入
+            model_input = torch.clamp(model_input, -1, 1)
+
             eps_theta = self.model(model_input, t.float())  # 这个不能加以范围限制
             # Calculation formula
             x0_t = (xt - (eps_theta * torch.sqrt(1 - alpha_t))) / torch.sqrt(alpha_t)
-
-            # x0_t = torch.clamp(x0_t, -1, 1)
+            x0_t = torch.clamp(x0_t, -1, 1) # 限制预测的x0
             x0_preds.append(x0_t.to('cpu'))
             c1 = eta * torch.sqrt((1 - alpha_t / alpha_prev) * (1 - alpha_prev) / (1 - alpha_t))
             c2 = torch.sqrt((1 - alpha_prev) - c1 ** 2)

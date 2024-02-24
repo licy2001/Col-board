@@ -1,8 +1,4 @@
 # -*- coding: utf-8 -*-
-# @Author  : Licy
-# @Time    : 2024/1/23 0:45
-# @Email   : licy0089@gmail.com
-# @Software: PyCharm
 
 import os
 import random

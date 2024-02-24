@@ -22,7 +22,7 @@ model:
   ch_mult: [1, 2, 3, 4]
   num_res_blocks: 2
   attn_resolutions: [32]
-  dropout: 0.1
+  dropout: 0.15
   ema: True
   resamp_with_conv: True
 

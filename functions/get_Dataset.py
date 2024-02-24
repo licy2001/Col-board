@@ -51,24 +51,6 @@ class Restruction:
 
         return train_loader, val_loader
 
-    def get_test_loaders(self):
-        print("=> Utilizing the RestructionDataset() for test data loading...")
-        test_dataset = RestructionDataset(
-            dir=os.path.join(self.config.data.data_dir, "test"),
-            transforms=self.transforms,
-            phase="test",
-        )
-
-        test_loader = torch.utils.data.DataLoader(
-            test_dataset,
-            batch_size=self.config.testing.batch_size,
-            shuffle=False,
-            num_workers=self.config.data.num_workers,
-            pin_memory=True,
-            drop_last=True,
-        )
-        return test_loader
-
 
 class RestructionDataset(torch.utils.data.Dataset):
     def __init__(self, dir, transforms, phase="train"):
@@ -88,7 +70,6 @@ class RestructionDataset(torch.utils.data.Dataset):
                 deg1_names.append(os.path.join(dir_deg1, item))
                 deg2_names.append(os.path.join(dir_deg2, item))
                 gt_names.append(os.path.join(dir_gt, item))
-        # print("The number of the training dataset is: {}".format(len(gt_names)))
         if self.phase == "train":
             x = list(enumerate(deg1_names))
             random.shuffle(x)
@@ -131,12 +112,10 @@ class Fusion:
         self.transforms = torchvision.transforms.Compose(
             [
                 torchvision.transforms.ToTensor(),
-                # torchvision.transforms.Lambda(lambda x: (x - 0.5) * 2),
             ]
         )
 
-    def get_fusion_loaders(self, parent_dir, batch_size, num_works=24):
-        print("=> Utilizing the RestructionDataset() for fusion data loading...")
+    def get_fusion_loaders(self, parent_dir, batch_size, num_works=16):
         fusion_dataset = FusionDataset(
             dir=parent_dir,
             transforms=self.transforms,
@@ -154,15 +133,14 @@ class Fusion:
 
 
 class FusionDataset(torch.utils.data.Dataset):
-    def __init__(self, dir, transforms, data_type="coco"):
+    def __init__(self, dir, transforms):
         super().__init__()
-        # if data_type == "coco":
         ir_path = os.path.join(dir, "ir")
         vi_path = os.path.join(dir, "vi")
-        # elif data_type == ""
 
         ir_names, vi_names = [], []
-        file_list = natsorted(os.listdir(ir_path))
+        # file_list = natsorted(os.listdir(ir_path))
+        file_list = os.listdir(ir_path)
         for item in file_list:
             if item.endswith(".jpg") or item.endswith(".png") or item.endswith(".bmp"):
                 ir_names.append(os.path.join(ir_path, item))

@@ -18,7 +18,7 @@ def parse_args_and_config():
     )
     parser.add_argument(
         "--resume",
-        default="",
+        default="/data2/wait/bisheCode/Fusion/results/TXCJ64/checkpoint/TXCJ_epoch_2100.pth",
         type=str,
         help="Path for checkpoint to load and resume",
     )

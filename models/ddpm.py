@@ -1,16 +1,16 @@
 # -*- coding:utf-8 -*-
-import os, sys
-sys.path.append("/data2/wait/bisheCode/Fusion")
+
+import os
 import logging
 import time
-import numpy as np
 from tqdm import tqdm
 import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
-from models.unet import UNet
-from functions.netAndSave import (
+from unet import UNet
+from Fusion.functions import sampling
+from Fusion.functions.netAndSave import (
     load_checkpoint,
     save_image,
     save_checkpoint,
@@ -21,11 +21,9 @@ from functions.netAndSave import (
     save_image_dict,
     save_image_list
 )
-from functions import sampling
-from functions.get_Optimizer import get_optimizer
-from functions.data_Process import data_transform, inverse_data_transform
-from functions.metrics import calculate_psnr, calculate_ssim
-
+from Fusion.functions.get_Optimizer import get_optimizer
+from Fusion.functions.data_Process import get_beta_schedule, data_transform, inverse_data_transform
+from Fusion.functions.metrics import calculate_psnr, calculate_ssim
 
 class EMAHelper(object):
     def __init__(self, mu=0.9999):
@@ -90,38 +88,6 @@ class EMAHelper(object):
         """
         self.shadow = state_dict
 
-
-def get_beta_schedule(beta_schedule, *, beta_start, beta_end, num_diffusion_timesteps):
-    def sigmoid(x):
-        return 1 / (np.exp(-x) + 1)
-
-    if beta_schedule == "quad":
-        betas = (
-                np.linspace(
-                    beta_start ** 0.5,
-                    beta_end ** 0.5,
-                    num_diffusion_timesteps,
-                    dtype=np.float64,
-                )
-                ** 2
-        )
-    elif beta_schedule == "linear":
-        betas = np.linspace(
-            beta_start, beta_end, num_diffusion_timesteps, dtype=np.float64
-        )
-    elif beta_schedule == "const":
-        betas = beta_end * np.ones(num_diffusion_timesteps, dtype=np.float64)
-    elif beta_schedule == "jsd":  # 1/T, 1/(T-1), 1/(T-2), ..., 1
-        betas = 1.0 / np.linspace(
-            num_diffusion_timesteps, 1, num_diffusion_timesteps, dtype=np.float64
-        )
-    elif beta_schedule == "sigmoid":
-        betas = np.linspace(-6, 6, num_diffusion_timesteps)
-        betas = sigmoid(betas) * (beta_end - beta_start) + beta_start
-    else:
-        raise NotImplementedError(beta_schedule)
-    assert betas.shape == (num_diffusion_timesteps,)
-    return betas
 
 
 class DDPM(object):
@@ -270,7 +236,7 @@ class DDPM(object):
         cudnn.benchmark = True
         train_loader, val_loader = DATASET.get_loaders()
         if os.path.isfile(self.args.resume):
-            self.load_ddm_ckpt(self.args.resume, ema=False, train=True)
+            self.load_ddm_ckpt(self.args.resume, ema=True, train=True)
 
         best_psnr = 0
         epochs_losses = self.epochs_loss
@@ -485,7 +451,7 @@ class DDPM(object):
         return time_step
 
     @torch.no_grad()
-    def ddim_sample(self, xt, x_cond, eta=1.0):
+    def ddim_sample(self, xt, x_cond, eta=0):
         """
         return: xs, x0_preds
         xs: xt的列表
@@ -502,8 +468,7 @@ class DDPM(object):
                 noise = torch.randn_like(xt)
             else:
                 noise = torch.zeros_like(xt)
-            # Time step, creating a tensor of size n
-            noise = torch.clamp(noise, -1, 1) # 限制噪声
+            # noise = torch.clamp(noise, -1, 1) # 限制噪声
             t = (torch.ones(n) * i).to(self.device)
             # Previous time step, creating a tensor of size n
             p_t = (torch.ones(n) * p_i).to(self.device)
@@ -511,11 +476,10 @@ class DDPM(object):
             alpha_t = self.get_value_t(self.alphas_bar, t)
             alpha_prev = self.get_value_t(self.alphas_bar, p_t)
             xt = xs[-1].to(self.device)
-            model_input = self.get_model_input(x_cond, xt) # 限制模型输入
-            model_input = torch.clamp(model_input, -1, 1)
+            model_input = self.get_model_input(x_cond, xt)
+            # model_input = torch.clamp(model_input, -1, 1)
 
             eps_theta = self.model(model_input, t.float())  # 这个不能加以范围限制
-            # Calculation formula
             x0_t = (xt - (eps_theta * torch.sqrt(1 - alpha_t))) / torch.sqrt(alpha_t)
             x0_t = torch.clamp(x0_t, -1, 1) # 限制预测的x0
             x0_preds.append(x0_t.to('cpu'))
@@ -555,7 +519,6 @@ class DDPM(object):
     # 训练的时候进行验证集采样来看psnr ssim 以及采样结果
     @torch.no_grad()
     def val_sample(self, val_loader, epoch):
-        # self.ema.apply_shadow()  # 应用 EMA 影子参数
         image_floder = image_folder = os.path.join(self.val_sample_dir, "epoch_{:04d}".format(epoch))
         os.makedirs(image_floder, exist_ok=True)
         per_img_psnr = 0.0
